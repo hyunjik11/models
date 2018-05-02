@@ -166,18 +166,18 @@ class VRNNCell(snt.AbstractModule):
       kl: The analytic kl divergence from q(z) to p(z).
       state: The new state of the VRNN.
     """
-    inputs, targets = observations
+    inputs, targets = observations # inputs[t,:]: x_t - mean(x_t) (mean across x-dim), targets[t,:]: x_{t+1} (raw data)
     rnn_state, prev_latent_encoded = state
     # Encode the data.
-    inputs_encoded = self.data_feat_extractor(inputs)
+    inputs_encoded = self.data_feat_extractor(inputs) 
     targets_encoded = self.data_feat_extractor(targets)
     # Run the RNN cell.
     rnn_inputs = tf.concat([inputs_encoded, prev_latent_encoded], axis=1)
-    rnn_out, new_rnn_state = self.rnn_cell(rnn_inputs, rnn_state)
+    rnn_out, new_rnn_state = self.rnn_cell(rnn_inputs, rnn_state) # h_{t+1} = f(x_t,z_t,h_t)
     # Create the prior and approximate posterior distributions.
     latent_dist_prior = self.prior(rnn_out)
     latent_dist_q = self.approx_posterior(rnn_out, targets_encoded,
-                                          prior_mu=latent_dist_prior.loc)
+                                          prior_mu=latent_dist_prior.loc) # q(z_{t+1}) = D(h_{t+1},x_{t+1})
     # Sample the new latent state z and encode it.
     latent_state = latent_dist_q.sample(seed=self.random_seed)
     latent_encoded = self.latent_feat_extractor(latent_state)

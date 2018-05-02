@@ -31,7 +31,6 @@ import bounds
 from data import datasets
 from models import vrnn
 
-
 def create_dataset_and_model(config, split, shuffle, repeat):
   """Creates the dataset and model for a given config.
 
@@ -65,6 +64,11 @@ def create_dataset_and_model(config, split, shuffle, repeat):
         config.dataset_path, config.batch_size,
         samples_per_timestep=config.data_dimension, prefetch_buffer_size=1,
         shuffle=False, repeat=False)
+    generative_bias_init = None
+    generative_distribution_class = vrnn.ConditionalNormalDistribution
+  elif config.dataset_type == "mnist":
+    inputs, targets, lengths = datasets.create_mnist_dataset(config.train_path,
+        config.valid_path, split, config.batch_size, config.seq_len)
     generative_bias_init = None
     generative_distribution_class = vrnn.ConditionalNormalDistribution
   model = vrnn.create_vrnn(inputs.get_shape().as_list()[2],
@@ -180,6 +184,7 @@ def run_train(config):
     return bound, train_op, global_step
 
   device = tf.train.replica_device_setter(ps_tasks=config.ps_tasks)
+  gpu_config = tf.ConfigProto(); gpu_config.gpu_options.visible_device_list = str(config.gpu) 
   with tf.Graph().as_default():
     if config.random_seed: tf.set_random_seed(config.random_seed)
     with tf.device(device):
@@ -187,6 +192,7 @@ def run_train(config):
       log_hook = create_logging_hook(global_step, bound)
       start_training = not config.stagger_workers
       with tf.train.MonitoredTrainingSession(
+          config=gpu_config,
           master=config.master,
           is_chief=config.task == 0,
           hooks=[log_hook],

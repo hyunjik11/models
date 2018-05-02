@@ -26,7 +26,7 @@ import runners
 
 # Shared flags.
 tf.app.flags.DEFINE_string("mode", "train",
-                           "The mode of the binary. Must be 'train' or 'test'.")
+                           "The mode of the binary. Must be 'train' or 'eval'.")
 tf.app.flags.DEFINE_string("model", "vrnn",
                            "Model choice. Currently only 'vrnn' is supported.")
 tf.app.flags.DEFINE_integer("latent_size", 64,
@@ -45,10 +45,18 @@ tf.app.flags.DEFINE_integer("batch_size", 4,
 tf.app.flags.DEFINE_integer("num_samples", 4,
                            "The number of samples (or particles) for multisample "
                            "algorithms.")
-tf.app.flags.DEFINE_string("logdir", "/tmp/smc_vi",
+tf.app.flags.DEFINE_string("logdir", "~/models/tmp/smc_vi",
                            "The directory to keep checkpoints and summaries in.")
 tf.app.flags.DEFINE_integer("random_seed", None,
                             "A random seed for seeding the TensorFlow graph.")
+tf.app.flags.DEFINE_string("train_path", "",
+                           "Path to load the video training dataset from.")
+tf.app.flags.DEFINE_string("valid_path", "",
+                           "Path to load the video validation dataset from.")
+tf.app.flags.DEFINE_integer("seq_len", 10,
+                           "Length of sequences of training/test batches.")
+tf.app.flags.DEFINE_integer("gpu", 0,
+                           "Index of GPU used.")
 
 # Training flags.
 tf.app.flags.DEFINE_string("bound", "fivo",
@@ -85,7 +93,7 @@ SPEECH_DEFAULT_DATA_DIMENSION = 200
 
 def main(unused_argv):
   tf.logging.set_verbosity(tf.logging.INFO)
-  if FLAGS.data_dimension is None:
+  if FLAGS.data_dimension is None: # not needed for video data
     if FLAGS.dataset_type == "pianoroll":
       FLAGS.data_dimension = PIANOROLL_DEFAULT_DATA_DIMENSION
     elif FLAGS.dataset_type == "speech":
