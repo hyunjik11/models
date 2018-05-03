@@ -25,9 +25,7 @@ from scipy.sparse import coo_matrix
 import tensorflow as tf
 
 import sys
-sys.path.insert(0, '/homes/hkim/seq_air/seq_air/data')
-sys.path.insert(0, '/homes/hkim/seq_air')
-import mnist_tools
+from seq_air.data import mnist_tools
 
 # The default number of threads used to process data in parallel.
 DEFAULT_PARALLELISM = 12
@@ -227,15 +225,16 @@ def create_speech_dataset(path,
   inputs, targets, lengths = itr.get_next()
   return inputs, targets, lengths
 
-def create_mnist_dataset(train_path, valid_path, split, batch_size, seq_len):
+def create_mnist_dataset(train_path, valid_path, split, batch_size, seq_len, stage_itr=0):
   """Creates a flying mnist dataset.
 
   Args:
     train_path: The path of a pickle file containing the training data.
     valid_path: The path of a pickle file containing the validation data.
     split: The split to use, can be train or valid.
-    batch_size: The batch size.
-    seq_len: The length of one sequence.
+    batch_size: size of mini-batch.
+    seq_len: initial sequence length.
+    stage_itr: number of iterations between increments of seq_len by 1.
   Returns:
     inputs: A batch of input sequences represented as a dense Tensor of shape
       [time, batch_size, ndims]. The sequences in inputs are the
@@ -246,17 +245,19 @@ def create_mnist_dataset(train_path, valid_path, split, batch_size, seq_len):
     lengths: An int Tensor of shape [batch_size] representing the lengths of each
       sequence in the batch.
   """
-  data_dict = mnist_tools.load_data(batch_size, train_path, valid_path, seq_len)
+  data_dict = mnist_tools.load_data(batch_size, train_path, valid_path, seq_len, stage_itr)
   if split == 'train':
-    images = data_dict['train_img'] # tf.float32 [seq_len,batch_size,H,W]
+    images = data_dict['train_img'] # tf.float32 [time,batch_size,H,W]
   elif split == 'valid':
-    images = data_dict['valid_img'] # tf.float32 [seq_len,batch_size,H,W]
+    images = data_dict['valid_img'] # tf.float32 [time,batch_size,H,W]
   else:
     raise ValueError('split should be one of "train" or "valid"')
   
-  targets = tf.reshape(images, shape=[seq_len, batch_size, -1]) # [seq_len,batch_size,H*W]
-  ndims = targets.shape[-1] # scalar
-  lengths = tf.constant(ndims, dtype=tf.int32, shape=[batch_size]) # [batch_size]
+  time = tf.shape(images)[0] # current sequence length
+  H, W = images.get_shape().as_list()[2:]
+  ndims = H * W
+  targets = tf.reshape(images, shape=[time, batch_size, ndims]) # [time,batch_size,H*W]
+  lengths = time + tf.zeros(shape=[batch_size], dtype=tf.int32) # [batch_size]
   # Shift the inputs one step forward in time. Also remove the last timestep
   # so that targets and inputs are the same length.
   inputs = tf.pad(targets, [[1, 0], [0, 0], [0, 0]], mode="CONSTANT")[:-1] # [seq_len,batch_size,H*W]

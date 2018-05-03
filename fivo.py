@@ -54,18 +54,26 @@ tf.app.flags.DEFINE_string("train_path", "",
 tf.app.flags.DEFINE_string("valid_path", "",
                            "Path to load the video validation dataset from.")
 tf.app.flags.DEFINE_integer("seq_len", 10,
-                           "Length of sequences of training/test batches.")
+                           "Initial length of sequences of training/test batches.")
+tf.app.flags.DEFINE_integer("stage_itr", 1000,
+                           "Number of iterations between increments of seq_len by 1")
+tf.app.flags.DEFINE_float("fixed_sigma", None,
+                          "Fixed sigma of likelihood. Learned by default.")
 tf.app.flags.DEFINE_integer("gpu", 0,
                            "Index of GPU used.")
 
 # Training flags.
 tf.app.flags.DEFINE_string("bound", "fivo",
                            "The bound to optimize. Can be 'elbo', 'iwae', or 'fivo'.")
-tf.app.flags.DEFINE_boolean("normalize_by_seq_len", True,
+tf.app.flags.DEFINE_boolean("normalize_by_seq_len", False,
                             "If true, normalize the loss by the number of timesteps "
                             "per sequence.")
-tf.app.flags.DEFINE_float("learning_rate", 0.0002,
-                          "The learning rate for ADAM.")
+tf.app.flags.DEFINE_string("optimizer", "adam",
+                           "Optimizer used for learning. Must be 'adam' or 'rmsprop'")
+tf.app.flags.DEFINE_float("learning_rate", 0.00001,
+                          "The learning rate for optimizer.")
+tf.app.flags.DEFINE_float("momentum", 0.9,
+                          "The momentum for RMSProp optimizer.")
 tf.app.flags.DEFINE_integer("max_steps", int(1e9),
                             "The number of gradient update steps to train for.")
 tf.app.flags.DEFINE_integer("summarize_every", 50,

@@ -31,6 +31,8 @@ import bounds
 from data import datasets
 from models import vrnn
 
+from seq_air.experiment_tools import print_num_params, print_variables_by_scope
+
 def create_dataset_and_model(config, split, shuffle, repeat):
   """Creates the dataset and model for a given config.
 
@@ -68,14 +70,15 @@ def create_dataset_and_model(config, split, shuffle, repeat):
     generative_distribution_class = vrnn.ConditionalNormalDistribution
   elif config.dataset_type == "mnist":
     inputs, targets, lengths = datasets.create_mnist_dataset(config.train_path,
-        config.valid_path, split, config.batch_size, config.seq_len)
+        config.valid_path, split, config.batch_size, config.seq_len, config.stage_itr)
     generative_bias_init = None
     generative_distribution_class = vrnn.ConditionalNormalDistribution
   model = vrnn.create_vrnn(inputs.get_shape().as_list()[2],
                            config.latent_size,
                            generative_distribution_class,
                            generative_bias_init=generative_bias_init,
-                           raw_sigma_bias=0.5)
+                           raw_sigma_bias=0.5,
+                           lkhd_fixed_sigma=config.fixed_sigma)
   return inputs, targets, lengths, model
 
 
@@ -124,7 +127,7 @@ def run_train(config):
       meaning see the flags defined in fivo.py.
   """
 
-  def create_logging_hook(step, bound_value):
+  def create_logging_hook(step, bound_value, cur_seq_len, sigma):
     """Creates a logging hook that prints the bound value periodically."""
     bound_label = config.bound + " bound"
     if config.normalize_by_seq_len:
@@ -132,16 +135,18 @@ def run_train(config):
     else:
       bound_label += " per sequence"
     def summary_formatter(log_dict):
-      return "Step %d, %s: %f" % (
-          log_dict["step"], bound_label, log_dict["bound_value"])
+      return "Step %d, Seq Len %d, lkhd sigma %.3f, %s: %f" % (
+          log_dict["step"], log_dict["cur_seq_len"], log_dict["sigma"], 
+          bound_label, log_dict["bound_value"])
     logging_hook = tf.train.LoggingTensorHook(
-        {"step": step, "bound_value": bound_value},
+        {"step": step, "bound_value": bound_value, "cur_seq_len": cur_seq_len, 
+         "sigma": sigma},
         every_n_iter=config.summarize_every,
         formatter=summary_formatter)
     return logging_hook
 
   def create_loss():
-    """Creates the loss to be optimized.
+    """Creates the loss to be optimized, and all logged quantities.
 
     Returns:
       bound: A float Tensor containing the value of the bound that is
@@ -165,31 +170,49 @@ def run_train(config):
     # Compute loss scaled by number of timesteps.
     ll_per_t = tf.reduce_mean(ll_per_seq / tf.to_float(lengths))
     ll_per_seq = tf.reduce_mean(ll_per_seq)
-
+    # Obtain sequence length
+    cur_seq_len = lengths[0]
+    # Obtain sigma of likelihood 
+    if config.fixed_sigma is None:
+        sigma_min = model.generative.sigma_min
+        raw_sigma_bias = model.generative.raw_sigma_bias
+        with tf.variable_scope("vrnn", reuse=True):
+            lkhd_preproc_sigma = tf.get_variable("lkhd_preproc_sigma")
+        lkhd_sigma = tf.maximum(tf.nn.softplus(lkhd_preproc_sigma + raw_sigma_bias),
+                                sigma_min)
+    else:
+        lkhd_sigma = tf.constant(config.fixed_sigma)
     tf.summary.scalar("train_ll_per_seq", ll_per_seq)
     tf.summary.scalar("train_ll_per_t", ll_per_t)
+    tf.summary.scalar("cur_seq_len", cur_seq_len)
+    tf.summary.scalar("lkhd_sigma", lkhd_sigma)
 
     if config.normalize_by_seq_len:
-      return ll_per_t, -ll_per_t
+      return ll_per_t, -ll_per_t, cur_seq_len, lkhd_sigma
     else:
-      return ll_per_seq, -ll_per_seq
+      return ll_per_seq, -ll_per_seq, cur_seq_len, lkhd_sigma
 
   def create_graph():
     """Creates the training graph."""
     global_step = tf.train.get_or_create_global_step()
-    bound, loss = create_loss()
-    opt = tf.train.AdamOptimizer(config.learning_rate)
-    grads = opt.compute_gradients(loss, var_list=tf.trainable_variables())
+    bound, loss, cur_seq_len, lkhd_sigma = create_loss()
+    if config.optimizer == 'Adam':
+        opt = tf.train.AdamOptimizer(config.learning_rate)
+    elif config.optimizer == 'RMSProp':
+        opt = tf.train.RMSPropOptimizer(config.learning_rate, moemntum=config.momentum)
+    grads = opt.compute_gradients(loss, var_list=tf.trainable_variables())    
     train_op = opt.apply_gradients(grads, global_step=global_step)
-    return bound, train_op, global_step
+    return bound, train_op, global_step, cur_seq_len, lkhd_sigma
 
   device = tf.train.replica_device_setter(ps_tasks=config.ps_tasks)
   gpu_config = tf.ConfigProto(); gpu_config.gpu_options.visible_device_list = str(config.gpu) 
   with tf.Graph().as_default():
     if config.random_seed: tf.set_random_seed(config.random_seed)
     with tf.device(device):
-      bound, train_op, global_step = create_graph()
-      log_hook = create_logging_hook(global_step, bound)
+      bound, train_op, global_step, cur_seq_len, lkhd_sigma = create_graph()
+      print_variables_by_scope()
+      print_num_params()
+      log_hook = create_logging_hook(global_step, bound, cur_seq_len, lkhd_sigma)
       start_training = not config.stagger_workers
       with tf.train.MonitoredTrainingSession(
           config=gpu_config,
@@ -197,7 +220,7 @@ def run_train(config):
           is_chief=config.task == 0,
           hooks=[log_hook],
           checkpoint_dir=config.logdir,
-          save_checkpoint_secs=120,
+          save_checkpoint_secs=3600,
           save_summaries_steps=config.summarize_every,
           log_step_count_steps=config.summarize_every) as sess:
         cur_step = -1

@@ -207,9 +207,10 @@ def create_vrnn(
     fcnet_hidden_sizes=None,
     encoded_data_size=None,
     encoded_latent_size=None,
-    sigma_min=0.0,
+    sigma_min=0.01,
     raw_sigma_bias=0.25,
     generative_bias_init=0.0,
+    lkhd_fixed_sigma=None,
     initializers=None,
     random_seed=None):
   """A factory method for creating VRNN cells.
@@ -289,15 +290,77 @@ def create_vrnn(
         bias_init=generative_bias_init,
         name="generative")
   else:
-    generative = ConditionalNormalDistribution(
+    generative = ConditionalNormalDistribution_fixed_var(
         size=data_size,
         hidden_layer_sizes=fcnet_hidden_sizes,
         initializers=initializers,
+        fixed_sigma=lkhd_fixed_sigma,
         name="generative")
   rnn_cell = tf.nn.rnn_cell.LSTMCell(rnn_hidden_size,
                                      initializer=initializers["w"])
   return VRNNCell(rnn_cell, data_feat_extractor, latent_feat_extractor,
                   prior, approx_posterior, generative, random_seed=random_seed)
+
+class ConditionalNormalDistribution_fixed_var(object):
+  """A Normal distribution conditioned on Tensor inputs via a fc network.
+     Has same variance across dimensions and data points"""
+
+  def __init__(self, size, hidden_layer_sizes, fixed_sigma=None, sigma_min = 0.0, 
+               raw_sigma_bias=-1., hidden_activation_fn=tf.nn.relu,
+               initializers=None, name="conditional_normal_distribution_fixed_sigma"):
+    """Creates a conditional Normal distribution with fixed variance.
+
+    Args:
+      size: The dimension of the random variable.
+      hidden_layer_sizes: The sizes of the hidden layers of the fully connected
+        network used to condition the distribution on the inputs.
+      fixed_sigma: Value of fixed sigma. Learned by default.
+      sigma_min: The minimum standard deviation allowed, a scalar.
+      raw_sigma_bias: A scalar that is added to the raw standard deviation
+        output from the fully connected network. Set to 0.25 by default to
+        prevent standard deviations close to 0.
+      hidden_activation_fn: The activation function to use on the hidden layers
+        of the fully connected network.
+      initializers: The variable intitializers to use for the fully connected
+        network. The network is implemented using snt.nets.MLP so it must
+        be a dictionary mapping the keys 'w' and 'b' to the initializers for
+        the weights and biases. Defaults to xavier for the weights and zeros
+        for the biases when initializers is None.
+      name: The name of this distribution, used for sonnet scoping.
+    """
+    self.fixed_sigma = fixed_sigma
+    self.size = size
+    self.sigma_min = sigma_min
+    self.raw_sigma_bias = raw_sigma_bias
+    self.name = name
+    if initializers is None:
+      initializers = _DEFAULT_INITIALIZERS     
+    self.fcnet = snt.nets.MLP(
+        output_sizes=hidden_layer_sizes + [size] ,
+        activation=hidden_activation_fn,
+        initializers=initializers,
+        activate_final=False,
+        use_bias=True,
+        name=name + "_fcnet")
+
+  def condition(self, tensor_list, **unused_kwargs):
+    """Computes the parameters of a normal distribution based on the inputs."""
+    inputs = tf.concat(tensor_list, axis=1)
+    outs = self.fcnet(inputs)
+    mu = outs
+    if self.fixed_sigma is None:
+        sigma_tensor = tf.get_variable(initializer=0., name="lkhd_preproc_sigma")
+        sigma = tf.maximum(tf.nn.softplus(sigma_tensor + self.raw_sigma_bias),
+                       self.sigma_min)
+    else:
+        sigma=self.fixed_sigma
+    sigma = sigma + tf.zeros_like(mu)
+    return mu, sigma
+
+  def __call__(self, *args, **kwargs):
+    """Creates a normal distribution conditioned on the inputs."""
+    mu, sigma = self.condition(args, **kwargs)
+    return tf.contrib.distributions.Normal(loc=mu, scale=sigma)
 
 
 class ConditionalNormalDistribution(object):
