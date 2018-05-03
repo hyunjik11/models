@@ -196,9 +196,9 @@ def run_train(config):
     """Creates the training graph."""
     global_step = tf.train.get_or_create_global_step()
     bound, loss, cur_seq_len, lkhd_sigma = create_loss()
-    if config.optimizer == 'Adam':
+    if config.optimizer == 'adam':
         opt = tf.train.AdamOptimizer(config.learning_rate)
-    elif config.optimizer == 'RMSProp':
+    elif config.optimizer == 'rmsprop':
         opt = tf.train.RMSPropOptimizer(config.learning_rate, moemntum=config.momentum)
     grads = opt.compute_gradients(loss, var_list=tf.trainable_variables())    
     train_op = opt.apply_gradients(grads, global_step=global_step)
