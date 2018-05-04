@@ -92,7 +92,8 @@ tf.app.flags.DEFINE_boolean("stagger_workers", True,
 # Evaluation flags.
 tf.app.flags.DEFINE_string("split", "train",
                            "Split to evaluate the model on. Can be 'train', 'valid', or 'test'.")
-
+tf.app.flags.DEFINE_integer("num_eval", 1000,
+                            "Number of data points for evaluation.")
 FLAGS = tf.app.flags.FLAGS
 
 PIANOROLL_DEFAULT_DATA_DIMENSION = 88

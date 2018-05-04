@@ -281,7 +281,7 @@ def run_eval(config):
 
   def average_bounds_over_dataset(lower_bounds, total_batch_length, batch_size,
                                   sess):
-    """Computes the values of the bounds, averaged over the datset.
+    """Computes the values of the bounds, averaged over config.num_eval data points.
 
     Args:
       lower_bounds: Tuple of float Tensors containing the values of the bounds
@@ -304,7 +304,7 @@ def run_eval(config):
     total_ll = np.zeros(3, dtype=np.float64)
     total_n_elems = 0.0
     total_length = 0.0
-    while True:
+    while total_n_elems < config.num_eval:
       try:
         outs = sess.run([lower_bounds, batch_size, total_batch_length])
       except tf.errors.OutOfRangeError:
@@ -343,19 +343,20 @@ def run_eval(config):
 
   with tf.Graph().as_default():
     if config.random_seed: tf.set_random_seed(config.random_seed)
+    gpu_config = tf.ConfigProto(); gpu_config.gpu_options.visible_device_list = str(config.gpu) 
     lower_bounds, total_batch_length, batch_size, global_step = create_graph()
     summary_dir = config.logdir + "/" + config.split
     summary_writer = tf.summary.FileWriter(
         summary_dir, flush_secs=15, max_queue=100)
     saver = tf.train.Saver()
-    with tf.train.SingularMonitoredSession() as sess:
+    with tf.train.SingularMonitoredSession(config=gpu_config) as sess:
       wait_for_checkpoint(saver, sess, config.logdir)
       step = sess.run(global_step)
       tf.logging.info("Model restored from step %d, evaluating." % step)
       ll_per_t, ll_per_seq = average_bounds_over_dataset(
           lower_bounds, total_batch_length, batch_size, sess)
       summarize_lls(ll_per_t, ll_per_seq, summary_writer, step)
-      tf.logging.info("%s elbo ll/t: %f, iwae ll/t: %f fivo ll/t: %f",
+      tf.logging.info("%s elbo ll/t: %.1f, iwae ll/t: %.1f fivo ll/t: %.1f",
                       config.split, ll_per_t[0], ll_per_t[1], ll_per_t[2])
-      tf.logging.info("%s elbo ll/seq: %f, iwae ll/seq: %f fivo ll/seq: %f",
+      tf.logging.info("%s elbo ll/seq: %.1f, iwae ll/seq: %.1f fivo ll/seq: %.1f",
                       config.split, ll_per_seq[0], ll_per_seq[1], ll_per_seq[2])
