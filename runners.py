@@ -127,20 +127,22 @@ def run_train(config):
       meaning see the flags defined in fivo.py.
   """
 
-  def create_logging_hook(step, bound_value, cur_seq_len, sigma):
+  def create_logging_hook(step, bound_value, cur_seq_len, sigma, elbo, iwae, 
+                          fivo, kl, rec):
     """Creates a logging hook that prints the bound value periodically."""
-    bound_label = config.bound + " bound"
+    bound_label = "train " + config.bound
     if config.normalize_by_seq_len:
       bound_label += " per timestep"
     else:
       bound_label += " per sequence"
     def summary_formatter(log_dict):
-      return "Step %d, Seq Len %d, lkhd sigma %.3f, %s: %f" % (
+      return ("Step %d, Seq Len %d, lkhd sigma %.3f, %s: %.1f, test elbo: %.1f, iwae: %.1f, fivo: %.1f, kl:%.1f, rec:%.1f") % (
           log_dict["step"], log_dict["cur_seq_len"], log_dict["sigma"], 
-          bound_label, log_dict["bound_value"])
+          bound_label, log_dict["bound_value"], log_dict["elbo"], log_dict["iwae"], 
+          log_dict["fivo"], log_dict["kl"], log_dict["rec"])
     logging_hook = tf.train.LoggingTensorHook(
         {"step": step, "bound_value": bound_value, "cur_seq_len": cur_seq_len, 
-         "sigma": sigma},
+         "sigma": sigma, "elbo":elbo, "iwae":iwae, "fivo":fivo, "kl":kl, "rec":rec},
         every_n_iter=config.summarize_every,
         formatter=summary_formatter)
     return logging_hook
@@ -176,43 +178,79 @@ def run_train(config):
     if config.fixed_sigma is None:
         sigma_min = model.generative.sigma_min
         raw_sigma_bias = model.generative.raw_sigma_bias
-        with tf.variable_scope("vrnn", reuse=True):
+        with tf.variable_scope("vrnn/decoder", reuse=tf.AUTO_REUSE):
             lkhd_preproc_sigma = tf.get_variable("lkhd_preproc_sigma")
         lkhd_sigma = tf.maximum(tf.nn.softplus(lkhd_preproc_sigma + raw_sigma_bias),
                                 sigma_min)
     else:
         lkhd_sigma = tf.constant(config.fixed_sigma)
+
+    # Obtain validation data
+    valid_config = config
+    valid_config.seq_len = config.max_seq_len
+    valid_config.stage_itr = 0
+    valid_config.batch_size = config.valid_batch_size
+    valid_inputs, valid_targets, valid_lengths, _ = create_dataset_and_model(
+        config, split="valid", shuffle=True, repeat=False)
+    
+    # Compute lower bounds, kl and reconstruction lkhd on the test data.
+    elbo_test_per_seq, kl_test_per_seq, _, _ = bounds.iwae(
+          model, (valid_inputs, valid_targets), valid_lengths, num_samples=1)
+    iwae_test_per_seq, _, _, _ = bounds.iwae(
+          model, (valid_inputs, valid_targets), valid_lengths, num_samples=config.num_samples)
+    fivo_test_per_seq, _, _, _, _ = bounds.fivo(
+          model, (valid_inputs, valid_targets), valid_lengths, num_samples=config.num_samples,
+          resampling_criterion=bounds.ess_criterion)
+
+    # take mean of all quantities across batch
+    elbo_test_per_seq = tf.reduce_mean(elbo_test_per_seq)
+    iwae_test_per_seq = tf.reduce_mean(iwae_test_per_seq)   
+    fivo_test_per_seq = tf.reduce_mean(fivo_test_per_seq)
+    kl_test_per_seq = tf.reduce_mean(kl_test_per_seq)
+    rec_test_per_seq = elbo_test_per_seq + kl_test_per_seq
+    
+    tf.summary.scalar("test_elbo_per_seq", elbo_test_per_seq)
+    tf.summary.scalar("test_iwae_per_seq", iwae_test_per_seq)
+    tf.summary.scalar("test_fivo_per_seq", fivo_test_per_seq)
+    tf.summary.scalar("test_kl_per_seq", kl_test_per_seq)
+    tf.summary.scalar("test_rec_per_seq", rec_test_per_seq)
     tf.summary.scalar("train_ll_per_seq", ll_per_seq)
     tf.summary.scalar("train_ll_per_t", ll_per_t)
     tf.summary.scalar("cur_seq_len", cur_seq_len)
     tf.summary.scalar("lkhd_sigma", lkhd_sigma)
 
     if config.normalize_by_seq_len:
-      return ll_per_t, -ll_per_t, cur_seq_len, lkhd_sigma
+      return (ll_per_t, -ll_per_t, cur_seq_len, lkhd_sigma, elbo_test_per_seq, 
+              iwae_test_per_seq, fivo_test_per_seq, kl_test_per_seq, rec_test_per_seq)
     else:
-      return ll_per_seq, -ll_per_seq, cur_seq_len, lkhd_sigma
+      return (ll_per_seq, -ll_per_seq, cur_seq_len, lkhd_sigma, elbo_test_per_seq, 
+              iwae_test_per_seq, fivo_test_per_seq, kl_test_per_seq, rec_test_per_seq)
 
   def create_graph():
     """Creates the training graph."""
     global_step = tf.train.get_or_create_global_step()
-    bound, loss, cur_seq_len, lkhd_sigma = create_loss()
+    (bound, loss, cur_seq_len, lkhd_sigma, elbo_test_per_seq, iwae_test_per_seq,
+     fivo_test_per_seq, kl_test_per_seq, rec_test_per_seq)  = create_loss()
     if config.optimizer == 'adam':
         opt = tf.train.AdamOptimizer(config.learning_rate)
     elif config.optimizer == 'rmsprop':
         opt = tf.train.RMSPropOptimizer(config.learning_rate, momentum=config.momentum)
     grads = opt.compute_gradients(loss, var_list=tf.trainable_variables())    
     train_op = opt.apply_gradients(grads, global_step=global_step)
-    return bound, train_op, global_step, cur_seq_len, lkhd_sigma
+    return (bound, train_op, global_step, cur_seq_len, lkhd_sigma, elbo_test_per_seq, 
+            iwae_test_per_seq, fivo_test_per_seq, kl_test_per_seq, rec_test_per_seq)
 
   device = tf.train.replica_device_setter(ps_tasks=config.ps_tasks)
   gpu_config = tf.ConfigProto(); gpu_config.gpu_options.visible_device_list = str(config.gpu) 
   with tf.Graph().as_default():
     if config.random_seed: tf.set_random_seed(config.random_seed)
     with tf.device(device):
-      bound, train_op, global_step, cur_seq_len, lkhd_sigma = create_graph()
+      (bound, train_op, global_step, cur_seq_len, lkhd_sigma, elbo_test_per_seq, 
+       iwae_test_per_seq, fivo_test_per_seq, kl_test_per_seq, rec_test_per_seq) = create_graph()
       print_variables_by_scope()
       print_num_params()
-      log_hook = create_logging_hook(global_step, bound, cur_seq_len, lkhd_sigma)
+      log_hook = create_logging_hook(global_step, bound, cur_seq_len, lkhd_sigma, elbo_test_per_seq, 
+       iwae_test_per_seq, fivo_test_per_seq, kl_test_per_seq, rec_test_per_seq)
       start_training = not config.stagger_workers
       with tf.train.MonitoredTrainingSession(
           config=gpu_config,

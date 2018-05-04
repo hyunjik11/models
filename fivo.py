@@ -54,9 +54,16 @@ tf.app.flags.DEFINE_string("train_path", "",
 tf.app.flags.DEFINE_string("valid_path", "",
                            "Path to load the video validation dataset from.")
 tf.app.flags.DEFINE_integer("seq_len", 10,
-                           "Initial length of sequences of training/test batches.")
+                            "Initial length of sequences of training batches."
+                            "Only relevant for mnist.")
+tf.app.flags.DEFINE_integer("max_seq_len", 10,
+                            "Max length of sequences for validation batches. "
+                            "Only relevant for mnist.")
+tf.app.flags.DEFINE_integer("valid_batch_size", 1000,
+                            "Batch size for validation")
 tf.app.flags.DEFINE_integer("stage_itr", 1000,
-                           "Number of iterations between increments of seq_len by 1")
+                            "Number of iterations between increments of seq_len by 1. "
+                            "Only relevant for mnist.")
 tf.app.flags.DEFINE_float("fixed_sigma", None,
                           "Fixed sigma of likelihood. Learned by default.")
 tf.app.flags.DEFINE_integer("gpu", 0,

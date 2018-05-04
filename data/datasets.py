@@ -231,7 +231,7 @@ def create_mnist_dataset(train_path, valid_path, split, batch_size, seq_len, sta
   Args:
     train_path: The path of a pickle file containing the training data.
     valid_path: The path of a pickle file containing the validation data.
-    split: The split to use, can be train or valid.
+    split: The split to use, can be 'train' or 'valid'.
     batch_size: size of mini-batch.
     seq_len: initial sequence length.
     stage_itr: number of iterations between increments of seq_len by 1.
@@ -258,7 +258,7 @@ def create_mnist_dataset(train_path, valid_path, split, batch_size, seq_len, sta
   ndims = H * W
   targets = tf.reshape(images, shape=[time, batch_size, ndims]) # [time,batch_size,H*W]
   lengths = time + tf.zeros(shape=[batch_size], dtype=tf.int32) # [batch_size]
-  # Shift the inputs one step forward in time. Also remove the last timestep
-  # so that targets and inputs are the same length.
+  # Shift the inputs one step forward in time, and fill in first dim with zeros. 
+  # Also remove the last timestep so that targets and inputs are the same length.
   inputs = tf.pad(targets, [[1, 0], [0, 0], [0, 0]], mode="CONSTANT")[:-1] # [seq_len,batch_size,H*W]
   return inputs, targets, lengths

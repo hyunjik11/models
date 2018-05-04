@@ -98,7 +98,7 @@ def iwae(cell,
     log_weights_acc, kl_acc = accs
     cur_inputs, cur_mask = nested.read_tas([inputs_ta, mask_ta], t)
     # Run the cell for one step.
-    log_q_z, log_p_z, log_p_x_given_z, kl, new_state = cell(
+    log_q_z, log_p_z, log_p_x_given_z, kl, new_state, _, _ = cell(
         cur_inputs,
         rnn_state,
         cur_mask,
@@ -250,7 +250,7 @@ def fivo(cell,
     log_weights_acc, log_p_hat_acc, kl_acc = accs
     cur_inputs, cur_mask = nested.read_tas([inputs_ta, mask_ta], t)
     # Run the cell for one step.
-    log_q_z, log_p_z, log_p_x_given_z, kl, new_state = cell(
+    log_q_z, log_p_z, log_p_x_given_z, kl, new_state, _, _ = cell(
         cur_inputs,
         rnn_state,
         cur_mask,

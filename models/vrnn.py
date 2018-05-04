@@ -153,7 +153,7 @@ class VRNNCell(snt.AbstractModule):
       observations: The observations at the current timestep, a tuple
         containing the model inputs and targets as Tensors of shape
         [batch_size, data_size].
-      state: The current state of the VRNN
+      state: Tuple of current state of the VRNN & previous encoded latents
       mask: Tensor of shape [batch_size], 1.0 if the current timestep is active
         active, 0.0 if it is not active.
 
@@ -164,20 +164,22 @@ class VRNNCell(snt.AbstractModule):
       log_p_x_given_z: The conditional log-likelihood, i.e. logprob of the
         observation according to the generative distribution.
       kl: The analytic kl divergence from q(z) to p(z).
-      state: The new state of the VRNN.
+      state: Tuple of next state of the VRNN & current encoded latents.
+      rec: reconstruction of observation.
+      sample: sample from generative distribution.
     """
-    inputs, targets = observations # inputs[t,:]: x_t - mean(x_t) (mean across x-dim), targets[t,:]: x_{t+1} (raw data)
+    inputs, targets = observations # inputs[t,:]: x_{t-1} (can be mean-centred), targets[t,:]: x_t (raw data)
     rnn_state, prev_latent_encoded = state
     # Encode the data.
     inputs_encoded = self.data_feat_extractor(inputs) 
     targets_encoded = self.data_feat_extractor(targets)
     # Run the RNN cell.
     rnn_inputs = tf.concat([inputs_encoded, prev_latent_encoded], axis=1)
-    rnn_out, new_rnn_state = self.rnn_cell(rnn_inputs, rnn_state) # h_{t+1} = f(x_t,z_t,h_t)
+    rnn_out, new_rnn_state = self.rnn_cell(rnn_inputs, rnn_state) # o_t,h_t=f(x_{t-1},z_{t-1},h_{t-1})
     # Create the prior and approximate posterior distributions.
-    latent_dist_prior = self.prior(rnn_out)
+    latent_dist_prior = self.prior(rnn_out) # p(z_t|o_t), a normal distribution.
     latent_dist_q = self.approx_posterior(rnn_out, targets_encoded,
-                                          prior_mu=latent_dist_prior.loc) # q(z_{t+1}) = D(h_{t+1},x_{t+1})
+                                          prior_mu=latent_dist_prior.loc) # q(z_t) = D(o_t,x_t), a normal distribution
     # Sample the new latent state z and encode it.
     latent_state = latent_dist_q.sample(seed=self.random_seed)
     latent_encoded = self.latent_feat_extractor(latent_state)
@@ -189,11 +191,19 @@ class VRNNCell(snt.AbstractModule):
         tf.contrib.distributions.kl_divergence(
             latent_dist_q, latent_dist_prior),
         axis=-1)
-    # Create the generative dist. and calculate the logprob of the targets.
+    # Create the generative dist. and calculate the logprob of the targets and reconstructions
     generative_dist = self.generative(latent_encoded, rnn_out)
     log_p_x_given_z = tf.reduce_sum(generative_dist.log_prob(targets), axis=-1)
+    rec = generative_dist.mean()
+
+    # Compute samples from generative model
+    prior_sample = latent_dist_prior.sample(seed=self.random_seed)
+    prior_sample_encoded = self.latent_feat_extractor(prior_sample)
+    sample_dist = self.generative(prior_sample_encoded, rnn_out)
+    sample = sample_dist.mean()
+    
     return (log_q_z, log_p_z, log_p_x_given_z, analytic_kl,
-            (new_rnn_state, latent_encoded))
+            (new_rnn_state, latent_encoded), rec, sample)
 
 _DEFAULT_INITIALIZERS = {"w": tf.contrib.layers.xavier_initializer(),
                          "b": tf.zeros_initializer()}
@@ -349,8 +359,9 @@ class ConditionalNormalDistribution_fixed_var(object):
     outs = self.fcnet(inputs)
     mu = outs
     if self.fixed_sigma is None:
-        sigma_tensor = tf.get_variable(initializer=0., name="lkhd_preproc_sigma")
-        sigma = tf.maximum(tf.nn.softplus(sigma_tensor + self.raw_sigma_bias),
+        with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
+            sigma_tensor = tf.get_variable(initializer=0., name="lkhd_preproc_sigma")
+            sigma = tf.maximum(tf.nn.softplus(sigma_tensor + self.raw_sigma_bias),
                        self.sigma_min)
     else:
         sigma=self.fixed_sigma
