@@ -61,11 +61,20 @@ tf.app.flags.DEFINE_integer("max_seq_len", 10,
                             "Only relevant for mnist.")
 tf.app.flags.DEFINE_integer("valid_batch_size", 1000,
                             "Batch size for validation")
+tf.app.flags.DEFINE_integer("sample_batch_size", 4,
+                            "Batch size for sampling and reconstructions. "
+                            "Use batch_size if it is smaller. ")
 tf.app.flags.DEFINE_integer("stage_itr", 1000,
                             "Number of iterations between increments of seq_len by 1. "
                             "Only relevant for mnist.")
 tf.app.flags.DEFINE_float("fixed_sigma", None,
                           "Fixed sigma of likelihood. Learned by default.")
+tf.app.flags.DEFINE_integer("H", 50,
+                          "Height of image.")
+tf.app.flags.DEFINE_integer("W", 50,
+                          "Width of image.")
+tf.app.flags.DEFINE_integer("C", 1,
+                          "Number of channels of image.")
 tf.app.flags.DEFINE_integer("gpu", 0,
                            "Index of GPU used.")
 

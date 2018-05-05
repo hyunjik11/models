@@ -28,6 +28,7 @@ import numpy as np
 import tensorflow as tf
 
 import bounds
+import utils
 from data import datasets
 from models import vrnn
 
@@ -202,7 +203,7 @@ def run_train(config):
           model, (valid_inputs, valid_targets), valid_lengths, num_samples=config.num_samples,
           resampling_criterion=bounds.ess_criterion)
 
-    # take mean of all quantities across batch
+    # Take mean of all quantities across batch
     elbo_test_per_seq = tf.reduce_mean(elbo_test_per_seq)
     iwae_test_per_seq = tf.reduce_mean(iwae_test_per_seq)   
     fivo_test_per_seq = tf.reduce_mean(fivo_test_per_seq)
@@ -218,6 +219,28 @@ def run_train(config):
     tf.summary.scalar("train_ll_per_t", ll_per_t)
     tf.summary.scalar("cur_seq_len", cur_seq_len)
     tf.summary.scalar("lkhd_sigma", lkhd_sigma)
+
+    # Compute reconstructions and samples from validation data.
+    sample_size = min(config.batch_size, config.sample_batch_size)
+    subset_inputs = valid_inputs[:,0:sample_size,:]
+    subset_targets = valid_targets[:,0:sample_size,:]
+    subset_lengths = valid_lengths[0:sample_size]
+    originals, reconstructions = utils.reconstruct(model, (subset_inputs, subset_targets),
+                                                   subset_lengths)
+    
+    def preproc_for_tf_summary_image(batch, seq_len, batch_size, ndims):
+      """Reshape image from [seq_len, batch_size, ndims] to [batch_size*seq_len, H, W, C]
+         for appropriate input to tf.summary.image(). Batch shape must be known apriori.
+      """
+      H, W, C = [config.H, config.W, config.C]
+      assert ndims == H * W * C
+      batch = tf.transpose(batch, [1, 0, 2]) # [batch_size, seq_len, ndims]
+      return tf.reshape(batch, shape=[batch_size * seq_len, H, W, C])
+    seq_len, batch_size, ndims = originals.get_shape().as_list()
+    originals = preproc_for_tf_summary_image(originals, seq_len, batch_size, ndims)
+    reconstructions = preproc_for_tf_summary_image(reconstructions, seq_len, batch_size, ndims)
+    tf.summary.image("originals", originals, max_outputs=(batch_size*seq_len))
+    tf.summary.image("reconstructions", reconstructions, max_outputs=(batch_size*seq_len))
 
     if config.normalize_by_seq_len:
       return (ll_per_t, -ll_per_t, cur_seq_len, lkhd_sigma, elbo_test_per_seq, 
