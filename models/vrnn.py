@@ -222,6 +222,7 @@ def create_vrnn(
     generative_bias_init=0.0,
     lkhd_fixed_sigma=None,
     hidden_activation_fn=tf.nn.relu,
+    mean_init=None,
     initializers=None,
     random_seed=None):
   """A factory method for creating VRNN cells.
@@ -253,6 +254,8 @@ def create_vrnn(
       for initalizing the mean of the distribution to a sensible starting point
       such as the mean of the training data. Only used with Bernoulli generative
       distributions.
+    mean_init: tensor of size [data_size] that is added on to output of decoder 
+      MLP that corresponds to the mean of the Normal distribution. 0 by default.
     initializers: The variable intitializers to use for the fully connected
       networks and RNN cell. Must be a dictionary mapping the keys 'w' and 'b'
       to the initializers for the weights and biases. Defaults to xavier for
@@ -310,6 +313,7 @@ def create_vrnn(
         hidden_activation_fn=hidden_activation_fn,
         initializers=initializers,
         fixed_sigma=lkhd_fixed_sigma,
+        mean_init=mean_init,
         name="generative")
   rnn_cell = tf.nn.rnn_cell.LSTMCell(rnn_hidden_size,
                                      initializer=initializers["w"])
@@ -321,7 +325,7 @@ class ConditionalNormalDistribution_fixed_var(object):
      Has same variance across dimensions and data points"""
 
   def __init__(self, size, hidden_layer_sizes, fixed_sigma=None, sigma_min = 0.0, 
-               raw_sigma_bias=-1., hidden_activation_fn=tf.nn.relu,
+               raw_sigma_bias=-1., hidden_activation_fn=tf.nn.relu, mean_init=None,
                initializers=None, name="conditional_normal_distribution_fixed_sigma"):
     """Creates a conditional Normal distribution with fixed variance.
 
@@ -336,6 +340,8 @@ class ConditionalNormalDistribution_fixed_var(object):
         prevent standard deviations close to 0.
       hidden_activation_fn: The activation function to use on the hidden layers
         of the fully connected network.
+      mean_init: tensor of size [size] that is added on to output of MLP 
+        that corresponds to the mean of the Normal distribution. 0 by default.
       initializers: The variable intitializers to use for the fully connected
         network. The network is implemented using snt.nets.MLP so it must
         be a dictionary mapping the keys 'w' and 'b' to the initializers for
@@ -347,6 +353,7 @@ class ConditionalNormalDistribution_fixed_var(object):
     self.size = size
     self.sigma_min = sigma_min
     self.raw_sigma_bias = raw_sigma_bias
+    self.mean_init = mean_init
     self.name = name
     if initializers is None:
       initializers = _DEFAULT_INITIALIZERS     
@@ -363,6 +370,9 @@ class ConditionalNormalDistribution_fixed_var(object):
     inputs = tf.concat(tensor_list, axis=1)
     outs = self.fcnet(inputs)
     mu = outs
+    if self.mean_init is not None:
+      mu += self.mean_init
+
     if self.fixed_sigma is None:
         with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
             sigma_tensor = tf.get_variable(initializer=0., name="lkhd_preproc_sigma")

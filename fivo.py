@@ -64,7 +64,7 @@ tf.app.flags.DEFINE_integer("valid_batch_size", 1000,
 tf.app.flags.DEFINE_integer("sample_batch_size", 4,
                             "Batch size for sampling and reconstructions. "
                             "Use batch_size if it is smaller. ")
-tf.app.flags.DEFINE_integer("stage_itr", 1000,
+tf.app.flags.DEFINE_integer("stage_itr", 0,
                             "Number of iterations between increments of seq_len by 1. "
                             "Only relevant for mnist.")
 tf.app.flags.DEFINE_float("fixed_sigma", None,
@@ -84,6 +84,8 @@ tf.app.flags.DEFINE_integer("num_hidden_layers", 1,
                            "Number of hidden layers for the fc parts of model.")
 tf.app.flags.DEFINE_integer("gpu", 0,
                            "Index of GPU used.")
+tf.app.flags.DEFINE_boolean("mean_image_init", False,
+                            "If true, initialise ouput of decoder to mean image.")
 
 # Training flags.
 tf.app.flags.DEFINE_string("bound", "fivo",

@@ -70,7 +70,7 @@ def create_dataset_and_model(config, split, shuffle, repeat):
     generative_bias_init = None
     generative_distribution_class = vrnn.ConditionalNormalDistribution
   elif config.dataset_type == "mnist":
-    inputs, targets, lengths = datasets.create_mnist_dataset(config.train_path,
+    inputs, targets, lengths, mean_image = datasets.create_mnist_dataset(config.train_path,
         config.valid_path, split, config.batch_size, config.seq_len, config.stage_itr)
     generative_bias_init = None
     generative_distribution_class = vrnn.ConditionalNormalDistribution
@@ -86,6 +86,12 @@ def create_dataset_and_model(config, split, shuffle, repeat):
   else:
     fcnet_hidden_sizes = [config.num_hidden_units]*config.num_hidden_layers    
 
+  # whether to initialise decoder with mean image
+  if config.mean_image_init:
+    mean_init = mean_image
+  else:
+    mean_init = None
+
   model = vrnn.create_vrnn(inputs.get_shape().as_list()[2],
                            config.latent_size,
                            generative_distribution_class,
@@ -93,7 +99,8 @@ def create_dataset_and_model(config, split, shuffle, repeat):
                            raw_sigma_bias=0.5,
                            lkhd_fixed_sigma=config.fixed_sigma,
                            hidden_activation_fn=activation_fn,
-                           fcnet_hidden_sizes=fcnet_hidden_sizes)
+                           fcnet_hidden_sizes=fcnet_hidden_sizes,
+                           mean_init=mean_init)
   return inputs, targets, lengths, model
 
 

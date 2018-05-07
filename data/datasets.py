@@ -23,6 +23,7 @@ from __future__ import print_function
 import pickle
 from scipy.sparse import coo_matrix
 import tensorflow as tf
+import numpy as np
 
 import sys
 from seq_air.data import mnist_tools
@@ -244,6 +245,7 @@ def create_mnist_dataset(train_path, valid_path, split, batch_size, seq_len, sta
       shape [time, batch_size, ndims].
     lengths: An int Tensor of shape [batch_size] representing the lengths of each
       sequence in the batch.
+    mean_image: Mean image. np.array[ndims].
   """
   data_dict = mnist_tools.load_data(batch_size, train_path, valid_path, seq_len, stage_itr)
   if split == 'train':
@@ -261,4 +263,9 @@ def create_mnist_dataset(train_path, valid_path, split, batch_size, seq_len, sta
   # Shift the inputs one step forward in time, and fill in first dim with zeros. 
   # Also remove the last timestep so that targets and inputs are the same length.
   inputs = tf.pad(targets, [[1, 0], [0, 0], [0, 0]], mode="CONSTANT")[:-1] # [seq_len,batch_size,H*W]
-  return inputs, targets, lengths
+
+  # Also obtain mean of full train data
+  full_data = data_dict['train_data']['imgs'] # np.float32 [time,N,H,W]
+  mean_image = np.mean(full_data, axis=(0,1)) # np.float32 [H,W]
+  mean_image = np.reshape(mean_image, (ndims)) # np.float32 [ndims]
+  return inputs, targets, lengths, mean_image
