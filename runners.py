@@ -260,7 +260,7 @@ def run_train(config):
       H, W, C = [config.H, config.W, config.C]
       assert ndims == H * W * C
       batch = tf.transpose(batch, [1, 0, 2]) # [batch_size, seq_len, ndims]
-      batch = tf.clip_by_value(batch, 0., 1.)
+      batch = tf.cast(tf.round(tf.clip_by_value(batch, 0., 1.) * 255), tf.uint8)
       return tf.reshape(batch, shape=[batch_size * seq_len, H, W, C])
 
     originals = preprocess(originals, seq_len, batch_size, ndims)

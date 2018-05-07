@@ -152,21 +152,27 @@ class VRNNCell(snt.AbstractModule):
     Args:
       observations: The observations at the current timestep, a tuple
         containing the model inputs and targets as Tensors of shape
-        [batch_size, data_size].
+        [num_samples * batch_size, data_size].
       state: Tuple of current state of the VRNN & previous encoded latents
-      mask: Tensor of shape [batch_size], 1.0 if the current timestep is active
+      mask: Tensor of shape [num_samples * batch_size], 1.0 if the current timestep is
         active, 0.0 if it is not active.
 
     Returns:
       log_q_z: The logprob of the latent state according to the approximate
-        posterior.
-      log_p_z: The logprob of the latent state according to the prior.
+        posterior. Tensor of shape [num_samples * batch_size].
+        So tf.reshape([num_samples, batch_size]) gives correct reshaping. 
+      log_p_z: The logprob of the latent state according to the prior. 
+        Tensor of shape [num_samples * batch_size]
       log_p_x_given_z: The conditional log-likelihood, i.e. logprob of the
         observation according to the generative distribution.
+        Tensor of shape [num_samples * batch_size]
       kl: The analytic kl divergence from q(z) to p(z).
+        Tensor of shape [num_samples * batch_size]
       state: Tuple of next state of the VRNN & current encoded latents.
       rec: reconstruction of observation.
+        Tensor of shape [num_samples * batch_size, ndims]
       sample: sample from generative distribution.
+        Tensor of shape [num_samples * batch_size, ndims]
     """
     inputs, targets = observations # inputs[t,:]: x_{t-1} (can be mean-centred), targets[t,:]: x_t (raw data)
     rnn_state, prev_latent_encoded = state

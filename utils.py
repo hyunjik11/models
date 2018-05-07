@@ -37,7 +37,21 @@ def reconstruct(cell, inputs, seq_lengths, parallel_iterations=30, swap_memory=T
     return t < max_seq_len
 
   def while_step(t, rnn_state, ta):
-    _, _, _, _, new_state, rec, _ = cell((inputs[t,:,:], targets[t,:,:]), rnn_state)
+    log_q_z, log_p_z, log_p_x_given_z, _, new_state, rec, _ = cell((inputs[t,:,:], 
+                                                                    targets[t,:,:]), rnn_state)
+    # log_q_z, log_p_z, log_p_x_given_z are of size [num_samples * batch_size]
+    # rec is of size [num_samples * batch_size, ndims]
+    # form weights for the num_samples, and resample according to these weights to get final rec.
+    log_weights = log_p_x_given_z + log_p_z - log_q_z
+    log_weights = tf.reshape(log_weights, [-1, batch_size]) # [num_samples, batch_size]
+    resampling_dist = tf.contrib.distributions.Categorical(
+        logits=tf.transpose(log_weights, perm=[1, 0])) 
+    # [batch_size] Categorical dist with num_samples categories
+    inds = resampling_dist.sample() # [batch_size] of indices in range(num_samples)
+    offset = tf.range(batch_size)
+    inds = inds * batch_size + offset # convert indices to lie in range(num_samples * batch_size)
+    rec = tf.gather(rec, inds) # size [batch_size, ndims]
+    
     new_ta = ta.write(t, rec)
     return t + 1, new_state, new_ta
 
