@@ -224,7 +224,7 @@ def create_vrnn(
     encoded_data_size=None,
     encoded_latent_size=None,
     sigma_min=0.01,
-    raw_sigma_bias=0.25,
+    raw_sigma_bias=-1.,
     generative_bias_init=0.0,
     lkhd_fixed_sigma=None,
     hidden_activation_fn=tf.nn.relu,
@@ -293,7 +293,7 @@ def create_vrnn(
       hidden_layer_sizes=fcnet_hidden_sizes,
       hidden_activation_fn=hidden_activation_fn,
       sigma_min=sigma_min,
-      raw_sigma_bias=raw_sigma_bias,
+      raw_sigma_bias=0.25,
       initializers=initializers,
       name="prior")
   approx_posterior = NormalApproximatePosterior(
@@ -337,7 +337,7 @@ class ConditionalNormalDistribution_fixed_var(object):
 
     Args:
       size: The dimension of the random variable.
-      hidden_layer_sizes: The sizes of the hidden layers of the fully connected
+      hidden_layer_sizes: List of sizes of the hidden layers of the fully connected
         network used to condition the distribution on the inputs.
       fixed_sigma: Value of fixed sigma. Learned by default.
       sigma_min: The minimum standard deviation allowed, a scalar.
@@ -346,38 +346,46 @@ class ConditionalNormalDistribution_fixed_var(object):
         prevent standard deviations close to 0.
       hidden_activation_fn: The activation function to use on the hidden layers
         of the fully connected network.
-      mean_init: tensor of size [size] that is added on to output of MLP 
+      mean_init: np.array[size] that forms bias of MLP output 
         that corresponds to the mean of the Normal distribution. 0 by default.
       initializers: The variable intitializers to use for the fully connected
-        network. The network is implemented using snt.nets.MLP so it must
-        be a dictionary mapping the keys 'w' and 'b' to the initializers for
-        the weights and biases. Defaults to xavier for the weights and zeros
-        for the biases when initializers is None.
+        network up to last hidden layer. The network is implemented 
+        using snt.nets.MLP so it must be a dictionary mapping the keys 'w' and 'b' 
+        to the initializers for the weights and biases. Defaults to 
+        xavier for the weights and zeros for the biases when initializers is None.
       name: The name of this distribution, used for sonnet scoping.
     """
     self.fixed_sigma = fixed_sigma
     self.size = size
     self.sigma_min = sigma_min
     self.raw_sigma_bias = raw_sigma_bias
-    self.mean_init = mean_init
     self.name = name
     if initializers is None:
-      initializers = _DEFAULT_INITIALIZERS     
-    self.fcnet = snt.nets.MLP(
-        output_sizes=hidden_layer_sizes + [size] ,
+      initializers = _DEFAULT_INITIALIZERS
+    fcnet_hidden = snt.nets.MLP(
+        output_sizes=hidden_layer_sizes,
         activation=hidden_activation_fn,
+        initializers=initializers,
+        activate_final=True,
+        use_bias=True,
+        name=name + "_fcnet_hidden")
+    if mean_init is not None:
+      initializers = {"w": tf.contrib.layers.xavier_initializer(),
+                         "b": tf.constant_initializer(mean_init)}
+    fcnet_out = snt.nets.MLP(
+        output_sizes=[size],
+        activation=tf.identity,
         initializers=initializers,
         activate_final=False,
         use_bias=True,
-        name=name + "_fcnet")
+        name=name + "_fcnet_out")
+    self.fcnet = snt.Sequential([fcnet_hidden, fcnet_out])
 
   def condition(self, tensor_list, **unused_kwargs):
     """Computes the parameters of a normal distribution based on the inputs."""
     inputs = tf.concat(tensor_list, axis=1)
     outs = self.fcnet(inputs)
     mu = outs
-    if self.mean_init is not None:
-      mu += self.mean_init
 
     if self.fixed_sigma is None:
         with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
@@ -399,7 +407,7 @@ class ConditionalNormalDistribution(object):
   """A Normal distribution conditioned on Tensor inputs via a fc network."""
 
   def __init__(self, size, hidden_layer_sizes, sigma_min=0.0,
-               raw_sigma_bias=0.25, hidden_activation_fn=tf.nn.relu,
+               raw_sigma_bias=-1.0, hidden_activation_fn=tf.nn.relu,
                initializers=None, name="conditional_normal_distribution"):
     """Creates a conditional Normal distribution.
 

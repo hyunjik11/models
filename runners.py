@@ -73,7 +73,7 @@ def create_dataset_and_model(config, split, shuffle, repeat):
     inputs, targets, lengths, mean_image = datasets.create_mnist_dataset(config.train_path,
         config.valid_path, split, config.batch_size, config.seq_len, config.stage_itr)
     generative_bias_init = None
-    generative_distribution_class = vrnn.ConditionalNormalDistribution
+    generative_distribution_class = vrnn.ConditionalNormalDistribution_fixed_var
 
   # set architecture for model
   if config.activation_fn == 'relu':
@@ -96,7 +96,6 @@ def create_dataset_and_model(config, split, shuffle, repeat):
                            config.latent_size,
                            generative_distribution_class,
                            generative_bias_init=generative_bias_init,
-                           raw_sigma_bias=0.5,
                            lkhd_fixed_sigma=config.fixed_sigma,
                            hidden_activation_fn=activation_fn,
                            fcnet_hidden_sizes=fcnet_hidden_sizes,
