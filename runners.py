@@ -74,12 +74,26 @@ def create_dataset_and_model(config, split, shuffle, repeat):
         config.valid_path, split, config.batch_size, config.seq_len, config.stage_itr)
     generative_bias_init = None
     generative_distribution_class = vrnn.ConditionalNormalDistribution
+
+  # set architecture for model
+  if config.activation_fn == 'relu':
+    activation_fn = tf.nn.relu
+  elif config.activation_fn == 'elu':
+    activation_fn = tf.nn.elu
+
+  if config.num_hidden_units is None:
+    fcnet_hidden_sizes = None
+  else:
+    fcnet_hidden_sizes = [config.num_hidden_units]*config.num_hidden_layers    
+
   model = vrnn.create_vrnn(inputs.get_shape().as_list()[2],
                            config.latent_size,
                            generative_distribution_class,
                            generative_bias_init=generative_bias_init,
                            raw_sigma_bias=0.5,
-                           lkhd_fixed_sigma=config.fixed_sigma)
+                           lkhd_fixed_sigma=config.fixed_sigma,
+                           hidden_activation_fn=activation_fn,
+                           fcnet_hidden_sizes=fcnet_hidden_sizes)
   return inputs, targets, lengths, model
 
 
@@ -227,8 +241,11 @@ def run_train(config):
     subset_lengths = valid_lengths[0:sample_size]
     originals, reconstructions = utils.reconstruct(model, (subset_inputs, subset_targets),
                                                    subset_lengths)
-    
-    def preproc_for_tf_summary_image(batch, seq_len, batch_size, ndims):
+    seq_len, batch_size, ndims = originals.get_shape().as_list()
+    samples = utils.sample(model, seq_len, ndims, num_samples=sample_size)
+
+    # reshape images to be suitable arguments for tf.summary.image
+    def preprocess(batch, seq_len, batch_size, ndims):
       """Reshape image from [seq_len, batch_size, ndims] to [batch_size*seq_len, H, W, C]
          for appropriate input to tf.summary.image(). Batch shape must be known apriori.
       """
@@ -236,11 +253,12 @@ def run_train(config):
       assert ndims == H * W * C
       batch = tf.transpose(batch, [1, 0, 2]) # [batch_size, seq_len, ndims]
       return tf.reshape(batch, shape=[batch_size * seq_len, H, W, C])
-    seq_len, batch_size, ndims = originals.get_shape().as_list()
-    originals = preproc_for_tf_summary_image(originals, seq_len, batch_size, ndims)
-    reconstructions = preproc_for_tf_summary_image(reconstructions, seq_len, batch_size, ndims)
+    originals = preprocess(originals, seq_len, batch_size, ndims)
+    reconstructions = preprocess(reconstructions, seq_len, batch_size, ndims)
+    samples = preprocess(samples, seq_len, batch_size, ndims)
     tf.summary.image("originals", originals, max_outputs=(batch_size*seq_len))
     tf.summary.image("reconstructions", reconstructions, max_outputs=(batch_size*seq_len))
+    tf.summary.image("samples", samples, max_outputs=(batch_size*seq_len))
 
     if config.normalize_by_seq_len:
       return (ll_per_t, -ll_per_t, cur_seq_len, lkhd_sigma, elbo_test_per_seq, 

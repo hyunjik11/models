@@ -75,6 +75,13 @@ tf.app.flags.DEFINE_integer("W", 50,
                           "Width of image.")
 tf.app.flags.DEFINE_integer("C", 1,
                           "Number of channels of image.")
+tf.app.flags.DEFINE_string("activation_fn", "relu",
+                           "Activation function for hidden layers of model.")
+tf.app.flags.DEFINE_integer("num_hidden_units", None,
+                           "Number of hidden units for the fc parts of model. "
+                           "Defaults to latent_size.")
+tf.app.flags.DEFINE_integer("num_hidden_layers", 1,
+                           "Number of hidden layers for the fc parts of model.")
 tf.app.flags.DEFINE_integer("gpu", 0,
                            "Index of GPU used.")
 

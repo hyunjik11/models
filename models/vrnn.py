@@ -146,7 +146,7 @@ class VRNNCell(snt.AbstractModule):
     return (self.rnn_cell.zero_state(batch_size, dtype),
             tf.zeros([batch_size, self.encoded_z_size], dtype=dtype))
 
-  def _build(self, observations, state, mask):
+  def _build(self, observations, state, mask=None):
     """Computes one timestep of the VRNN.
 
     Args:
@@ -221,6 +221,7 @@ def create_vrnn(
     raw_sigma_bias=0.25,
     generative_bias_init=0.0,
     lkhd_fixed_sigma=None,
+    hidden_activation_fn=tf.nn.relu,
     initializers=None,
     random_seed=None):
   """A factory method for creating VRNN cells.
@@ -281,6 +282,7 @@ def create_vrnn(
   prior = ConditionalNormalDistribution(
       size=latent_size,
       hidden_layer_sizes=fcnet_hidden_sizes,
+      hidden_activation_fn=hidden_activation_fn,
       sigma_min=sigma_min,
       raw_sigma_bias=raw_sigma_bias,
       initializers=initializers,
@@ -288,6 +290,7 @@ def create_vrnn(
   approx_posterior = NormalApproximatePosterior(
       size=latent_size,
       hidden_layer_sizes=fcnet_hidden_sizes,
+      hidden_activation_fn=hidden_activation_fn,
       sigma_min=sigma_min,
       raw_sigma_bias=raw_sigma_bias,
       initializers=initializers,
@@ -296,6 +299,7 @@ def create_vrnn(
     generative = ConditionalBernoulliDistribution(
         size=data_size,
         hidden_layer_sizes=fcnet_hidden_sizes,
+        hidden_activation_fn=hidden_activation_fn,
         initializers=initializers,
         bias_init=generative_bias_init,
         name="generative")
@@ -303,6 +307,7 @@ def create_vrnn(
     generative = ConditionalNormalDistribution_fixed_var(
         size=data_size,
         hidden_layer_sizes=fcnet_hidden_sizes,
+        hidden_activation_fn=hidden_activation_fn,
         initializers=initializers,
         fixed_sigma=lkhd_fixed_sigma,
         name="generative")
