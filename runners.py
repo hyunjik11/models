@@ -98,6 +98,8 @@ def create_dataset_and_model(config, split, shuffle, repeat):
                            generative_bias_init=generative_bias_init,
                            lkhd_fixed_sigma=config.fixed_sigma,
                            hidden_activation_fn=activation_fn,
+                           conv=config.conv,
+                           rnn_hidden_size=config.rnn_hidden_size,
                            fcnet_hidden_sizes=fcnet_hidden_sizes,
                            mean_init=mean_init)
   return inputs, targets, lengths, model

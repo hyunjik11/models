@@ -19,8 +19,11 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import numpy as np
 import sonnet as snt
 import tensorflow as tf
+
+import utils
 
 
 class VRNNCell(snt.AbstractModule):
@@ -223,6 +226,10 @@ def create_vrnn(
     fcnet_hidden_sizes=None,
     encoded_data_size=None,
     encoded_latent_size=None,
+    conv=False,
+    output_channels=[32,32,32,64,64,64,64,64,64],#[32,32,64,64],
+    kernel_shapes=[3]*9,#[4,4,4,4],
+    strides=[1,2,1,2,1,2,1,1,1],#[2,2,2,2],
     sigma_min=0.01,
     raw_sigma_bias=-1.,
     generative_bias_init=0.0,
@@ -249,6 +256,13 @@ def create_vrnn(
       None, defaults to latent_size.
     encoded_latent_size: The size of the output of the latent state encoding
       network. If None, defaults to latent_size.
+    conv: Boolean to determine whether to use convolutions for data encoding.
+    output_channels: List of number of output channels (feature maps) at each 
+      convolutional layer of data feature extractor. Only relevant if conv=True.
+    kernel_shapes: List of size of each dim of feature map at each
+      convolutional layer of data feature extractor. Only relevant if conv=True.
+    strides: List of sizes of strides of data feature extractor.
+      Only relevant if conv=True.
     sigma_min: The minimum value that the standard deviation of the
       distribution over the latent state can take.
     raw_sigma_bias: A scalar that is added to the raw standard deviation
@@ -280,7 +294,18 @@ def create_vrnn(
     encoded_latent_size = latent_size
   if initializers is None:
     initializers = _DEFAULT_INITIALIZERS
-  data_feat_extractor = snt.nets.MLP(
+  if conv:
+    data_feat_extractor = conv_data_feat_extractor(
+      size=encoded_data_size,
+      input_size=data_size,
+      output_channels=output_channels,
+      kernel_shapes=kernel_shapes,
+      strides=strides,
+      hidden_layer_sizes=fcnet_hidden_sizes,
+      hidden_activation_fn=hidden_activation_fn,
+      initializers=initializers)
+  else:
+    data_feat_extractor = snt.nets.MLP(
       output_sizes=fcnet_hidden_sizes + [encoded_data_size],
       initializers=initializers,
       name="data_feat_extractor")
@@ -313,7 +338,21 @@ def create_vrnn(
         bias_init=generative_bias_init,
         name="generative")
   else:
-    generative = ConditionalNormalDistribution_fixed_var(
+    if conv:
+      generative = ConditionalNormalDistribution_fixed_var_deconv(
+        size=data_size,
+        output_channels=output_channels[::-1][:-1] + [1],
+        kernel_shapes=kernel_shapes[::-1],
+        strides=strides[::-1],
+        hidden_layer_sizes=fcnet_hidden_sizes[::-1],
+        feature_channels=output_channels[0],
+        hidden_activation_fn=hidden_activation_fn,
+        initializers=initializers,
+        fixed_sigma=lkhd_fixed_sigma,
+        mean_init=mean_init,
+        name="generative")
+    else:
+      generative = ConditionalNormalDistribution_fixed_var(
         size=data_size,
         hidden_layer_sizes=fcnet_hidden_sizes,
         hidden_activation_fn=hidden_activation_fn,
@@ -325,6 +364,56 @@ def create_vrnn(
                                      initializer=initializers["w"])
   return VRNNCell(rnn_cell, data_feat_extractor, latent_feat_extractor,
                   prior, approx_posterior, generative, random_seed=random_seed)
+
+def conv_data_feat_extractor(size, input_size, output_channels, kernel_shapes, strides, 
+               hidden_layer_sizes, padding='SAME', hidden_activation_fn=tf.nn.relu,
+               initializers=None, name="data_feat_extractor"):
+  """Convolutional data feature extractor. Applies convnet then fcnet to data.
+
+  Args:
+    size: The dimension of the output.
+    input_size: The dimensions of the input: H*W. Assumes H=W.
+    output_channels: List of number of output channels (feature maps) at each layer.
+    kernel_shapes: List of size of each dim of feature map.
+    strides: List of sizes of strides
+    padding: String indicating type of padding.
+    hidden_layer_sizes: List of sizes of all but last hidden layers of the fc
+      network applied to the output of conv.
+    hidden_activation_fn: The activation function to use on fcnet and convnet.
+    initializers: The variable intitializers to use for the fully connected
+      network. The network is implemented using snt.nets.MLP so it must
+      be a dictionary mapping the keys 'w' and 'b' to the initializers for
+      the weights and biases. Defaults to xavier for the weights and zeros
+      for the biases when initializers is None.
+    name: The name of this distribution, used for sonnet scoping.
+  """
+  if initializers is None:
+    initializers = _DEFAULT_INITIALIZERS
+  num_conv_layers = len(output_channels)
+  num_channels = 1 # number of channels (1 for greyscale 3 for colour)
+  input_shape = [int(np.sqrt(input_size))]*2
+  unflatten = snt.BatchReshape(shape=input_shape + [num_channels])
+
+  paddings = [padding]*num_conv_layers
+  convnet = snt.nets.ConvNet2D(
+      output_channels=output_channels,
+      kernel_shapes=kernel_shapes,
+      strides=strides,
+      paddings=paddings,
+      activation=hidden_activation_fn,
+      initializers=initializers,
+      activate_final=True,
+      use_bias=True,
+      name=name + "_convnet")
+  flatten = snt.BatchFlatten()    
+  fcnet = snt.nets.MLP(
+      output_sizes=hidden_layer_sizes + [size],
+      activation=hidden_activation_fn,
+      initializers=initializers,
+      activate_final=False,
+      use_bias=True,
+      name=name + "_fcnet")
+  return snt.Sequential([unflatten, convnet, flatten, fcnet])
 
 class ConditionalNormalDistribution_fixed_var(object):
   """A Normal distribution conditioned on Tensor inputs via a fc network.
@@ -342,8 +431,7 @@ class ConditionalNormalDistribution_fixed_var(object):
       fixed_sigma: Value of fixed sigma. Learned by default.
       sigma_min: The minimum standard deviation allowed, a scalar.
       raw_sigma_bias: A scalar that is added to the raw standard deviation
-        output from the fully connected network. Set to 0.25 by default to
-        prevent standard deviations close to 0.
+        output from the fully connected network.
       hidden_activation_fn: The activation function to use on the hidden layers
         of the fully connected network.
       mean_init: np.array[size] that forms bias of MLP output 
@@ -388,12 +476,12 @@ class ConditionalNormalDistribution_fixed_var(object):
     mu = outs
 
     if self.fixed_sigma is None:
-        with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
-            sigma_tensor = tf.get_variable(initializer=0., name="lkhd_preproc_sigma")
-            sigma = tf.maximum(tf.nn.softplus(sigma_tensor + self.raw_sigma_bias),
-                       self.sigma_min)
+      with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
+        sigma_tensor = tf.get_variable(initializer=0., name="lkhd_preproc_sigma")
+        sigma = tf.maximum(tf.nn.softplus(sigma_tensor + self.raw_sigma_bias),
+                   self.sigma_min)
     else:
-        sigma=self.fixed_sigma
+      sigma=self.fixed_sigma
     sigma = sigma + tf.zeros_like(mu)
     return mu, sigma
 
@@ -402,6 +490,121 @@ class ConditionalNormalDistribution_fixed_var(object):
     mu, sigma = self.condition(args, **kwargs)
     return tf.contrib.distributions.Normal(loc=mu, scale=sigma)
 
+class ConditionalNormalDistribution_fixed_var_deconv(object):
+  """A Normal distribution conditioned on Tensor inputs via a deconv network.
+     Has same variance across dimensions and data points"""
+
+  def __init__(self, size, output_channels, kernel_shapes, strides, hidden_layer_sizes,
+               feature_channels, padding='SAME', fixed_sigma=None, sigma_min = 0.0, 
+               raw_sigma_bias=-1., hidden_activation_fn=tf.nn.relu, mean_init=None,
+               initializers=None, name="conditional_normal_distribution_fixed_sigma"):
+    """Creates a conditional Normal distribution with fixed variance.
+
+    Args:
+      size: The dimension of the random variable.
+      output_channels: List of number of output channels (feature maps) at each layer.
+      kernel_shapes: List of size of each dim of feature map.
+      strides: List of sizes of strides
+      padding: String indicating type of padding.
+      hidden_layer_sizes: List of sizes of all but last hidden layers of the fc
+        network initially applied to the inputs.
+      feature_channels: number of channels of input that will be fed into deconv
+      fixed_sigma: Value of fixed sigma. Learned by default.
+      sigma_min: The minimum standard deviation allowed, a scalar.
+      raw_sigma_bias: A scalar that is added to the raw standard deviation
+        output from the fully connected network.
+      hidden_activation_fn: The activation function to use on deconvnet and fcnet.
+      mean_init: np.array[size] that forms bias of MLP output 
+        that corresponds to the mean of the Normal distribution. 0 by default.
+      initializers: The variable intitializers to use for the fully connected
+        network up to last hidden layer. The network is implemented 
+        using snt.nets.MLP so it must be a dictionary mapping the keys 'w' and 'b' 
+        to the initializers for the weights and biases. Defaults to 
+        xavier for the weights and zeros for the biases when initializers is None.
+      name: The name of this distribution, used for sonnet scoping.
+    """
+    self.fixed_sigma = fixed_sigma
+    self.size = size
+    self.sigma_min = sigma_min
+    self.raw_sigma_bias = raw_sigma_bias
+    self.name = name
+    target_shape = [int(np.sqrt(size))]*2
+    assert np.prod(target_shape) == size
+
+    input_shape, output_shapes = utils.compute_deconv_output_shapes(
+                                   target_shape, strides)
+    flat_size = np.prod(input_shape)*feature_channels
+    hidden_layer_sizes.append(flat_size)
+    if initializers is None:
+      initializers = _DEFAULT_INITIALIZERS
+    fcnet = snt.nets.MLP(
+        output_sizes=hidden_layer_sizes,
+        activation=hidden_activation_fn,
+        initializers=initializers,
+        activate_final=True,
+        use_bias=True,
+        name=name + "_fcnet")
+
+    unflatten = snt.BatchReshape(shape=input_shape + [feature_channels])
+
+    num_deconv_layers = len(output_channels)
+    paddings = [padding]*num_deconv_layers
+    deconvnet_hidden = snt.nets.ConvNet2DTranspose(
+        output_channels=output_channels[:-1],
+        output_shapes=output_shapes[:-1],
+        kernel_shapes=kernel_shapes[:-1],
+        strides=strides[:-1],
+        paddings=paddings[:-1],
+        activation=hidden_activation_fn,
+        initializers=initializers,
+        activate_final=True,
+        use_bias=True,
+        name=name + "_deconvnet_hidden")
+    deconvnet_out = snt.nets.ConvNet2DTranspose(
+        output_channels=[output_channels[-1]],
+        output_shapes=[output_shapes[-1]],
+        kernel_shapes=[kernel_shapes[-1]],
+        strides=[strides[-1]],
+        paddings=[paddings[-1]],
+        activation=hidden_activation_fn,
+        initializers=initializers,
+        activate_final=False,
+        use_bias=True,
+        name=name + "_deconvnet_out")
+    flatten = snt.BatchFlatten()
+    if mean_init is not None:
+      with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
+        bias_tensor = tf.get_variable(initializer=mean_init, name="output_bias")
+      additive_bias_fn = lambda x: x + bias_tensor
+    else:
+      additive_bias_fn = lambda x: x
+    self.dnn = snt.Sequential([fcnet, 
+                               unflatten, 
+                               deconvnet_hidden, 
+                               deconvnet_out, 
+                               flatten,
+                               additive_bias_fn])
+
+  def condition(self, tensor_list, **unused_kwargs):
+    """Computes the parameters of a normal distribution based on the inputs."""
+    inputs = tf.concat(tensor_list, axis=1)
+    outs = self.dnn(inputs)
+    mu = outs
+
+    if self.fixed_sigma is None:
+      with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
+        sigma_tensor = tf.get_variable(initializer=0., name="lkhd_preproc_sigma")
+        sigma = tf.maximum(tf.nn.softplus(sigma_tensor + self.raw_sigma_bias),
+                       self.sigma_min)
+    else:
+      sigma=self.fixed_sigma
+    sigma = sigma + tf.zeros_like(mu)
+    return mu, sigma
+
+  def __call__(self, *args, **kwargs):
+    """Creates a normal distribution conditioned on the inputs."""
+    mu, sigma = self.condition(args, **kwargs)
+    return tf.contrib.distributions.Normal(loc=mu, scale=sigma)
 
 class ConditionalNormalDistribution(object):
   """A Normal distribution conditioned on Tensor inputs via a fc network."""
@@ -455,7 +658,6 @@ class ConditionalNormalDistribution(object):
     mu, sigma = self.condition(args, **kwargs)
     return tf.contrib.distributions.Normal(loc=mu, scale=sigma)
 
-
 class ConditionalBernoulliDistribution(object):
   """A Bernoulli distribution conditioned on Tensor inputs via a fc net."""
 
@@ -502,7 +704,8 @@ class ConditionalBernoulliDistribution(object):
 
 
 class NormalApproximatePosterior(ConditionalNormalDistribution):
-  """A Normally-distributed approx. posterior with res_q parameterization."""
+  """A Normally-distributed approx. posterior with res_q parameterization,
+     that uses MLPs for the construction of q."""
 
   def condition(self, tensor_list, prior_mu):
     """Generates the mean and variance of the normal distribution.

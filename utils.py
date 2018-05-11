@@ -7,6 +7,7 @@ from __future__ import division
 from __future__ import print_function
 
 import tensorflow as tf
+import math
 
 def reconstruct(cell, inputs, seq_lengths, parallel_iterations=30, swap_memory=True):
   """ Compute mean reconstructions of inputs.
@@ -102,3 +103,39 @@ def sample(cell, max_seq_len, ndims, num_samples=4, parallel_iterations=30, swap
       swap_memory=swap_memory)
   samples = ta.stack()
   return samples
+
+def compute_deconv_output_shapes(target_shape, strides):
+  """ Compute output_shapes argument for snt.nets.ConvNet2DTranspose
+  given target_shape, output_channels and strides.
+  Args:
+    target_shape: Shape of target image. [H,W]. e.g. [50,50]
+    strides: List of sizes of strides. e.g. [1,2,2]
+  Returns:
+    input_shape: Shape of correct input to deconvnet. [H,W]. e.g. [13,13]
+    output_shapes: List of output shapes after each deconv layer. e.g. [[13,13],[25,25],[50,50]] 
+  """
+  shapes_rev = [target_shape]
+  for i,_ in enumerate(strides):
+    stride = strides[::-1][i]
+    shapes_rev.append([int(math.ceil(float(x)/stride)) for x in shapes_rev[i]])
+  shapes = shapes_rev[::-1]
+  input_shape = shapes[0]
+  output_shapes = shapes[1:]
+  return input_shape, output_shapes
+ 
+def compute_conv_output_shapes(input_shape, strides):
+  """ Compute output_shapes for snt.nets.ConvNet2D
+  given input_shape and strides.
+  Args:
+    input_shape: Shape of input image. [H,W]. e.g. [50,50]
+    strides: List of sizes of strides. e.g. [2,2,1]
+  Returns:
+    output_shapes: List of output shapes after each conv layer. e.g. [[25,25],[13,13],[13,13]] 
+  """ 
+  shapes=[input_shape]
+  for i,_ in enumerate(strides):
+    stride = strides[i]
+    shapes.append([int(math.ceil(float(x)/stride)) for x in shapes[i]])
+  output_shapes = shapes[1:]
+  return output_shapes
+

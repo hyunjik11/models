@@ -59,7 +59,7 @@ tf.app.flags.DEFINE_integer("seq_len", 10,
 tf.app.flags.DEFINE_integer("max_seq_len", 10,
                             "Max length of sequences for validation batches. "
                             "Only relevant for mnist.")
-tf.app.flags.DEFINE_integer("valid_batch_size", 1000,
+tf.app.flags.DEFINE_integer("valid_batch_size", 500,
                             "Batch size for validation")
 tf.app.flags.DEFINE_integer("sample_batch_size", 4,
                             "Batch size for sampling and reconstructions. "
@@ -77,6 +77,9 @@ tf.app.flags.DEFINE_integer("C", 1,
                           "Number of channels of image.")
 tf.app.flags.DEFINE_string("activation_fn", "relu",
                            "Activation function for hidden layers of model.")
+tf.app.flags.DEFINE_integer("rnn_hidden_size", None,
+                           "Number of hidden units for RNN. "
+                           "Defaults to latent_size.")
 tf.app.flags.DEFINE_integer("num_hidden_units", None,
                            "Number of hidden units for the fc parts of model. "
                            "Defaults to latent_size.")
@@ -86,6 +89,9 @@ tf.app.flags.DEFINE_integer("gpu", 0,
                            "Index of GPU used.")
 tf.app.flags.DEFINE_boolean("mean_image_init", False,
                             "If true, initialise ouput of decoder to mean image.")
+tf.app.flags.DEFINE_boolean("conv", False,
+                            "If true, use convolutional encoder/decoder. "
+                            "If false, use fully connected encoder/decoder.")
 
 # Training flags.
 tf.app.flags.DEFINE_string("bound", "fivo",
