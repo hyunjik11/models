@@ -214,7 +214,7 @@ def run_train(config):
     valid_config.stage_itr = 0
     valid_config.batch_size = config.valid_batch_size
     valid_inputs, valid_targets, valid_lengths, _ = create_dataset_and_model(
-        config, split="valid", shuffle=True, repeat=False)
+        valid_config, split="valid", shuffle=True, repeat=False)
     
     # Compute lower bounds, kl and reconstruction lkhd on the test data.
     elbo_test_per_seq, kl_test_per_seq, _, _ = bounds.iwae(
