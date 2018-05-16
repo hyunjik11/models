@@ -38,7 +38,7 @@ def reconstruct(cell, inputs, seq_lengths, parallel_iterations=30, swap_memory=T
     return t < max_seq_len
 
   def while_step(t, rnn_state, ta):
-    log_q_z, log_p_z, log_p_x_given_z, _, new_state, rec, _ = cell((inputs[t,:,:], 
+    log_q_z, log_p_z, log_p_x_given_z, _, new_state, rec, _, _ = cell((inputs[t,:,:], 
                                                                     targets[t,:,:]), rnn_state)
     # log_q_z, log_p_z, log_p_x_given_z are of size [num_samples * batch_size]
     # rec is of size [num_samples * batch_size, ndims]
@@ -66,6 +66,61 @@ def reconstruct(cell, inputs, seq_lengths, parallel_iterations=30, swap_memory=T
   reconstructions = ta.stack()
   return targets, reconstructions
 
+def z_mean(cell, inputs, parallel_iterations=30, swap_memory=True):
+  """ Compute mean embeddings of inputs. i.e. mean(q(z|x)) where x=inputs.
+  Args:
+    cell: A callable that implements one timestep of the model. See
+      models/vrnn.py for an example.
+    inputs: The inputs to the model. A potentially nested list or tuple of
+      Tensors each of shape [max_seq_len, batch_size, ...]. The Tensors must
+      have a rank at least two and have matching shapes in the first two
+      dimensions, which represent time and the batch respectively. At each
+      timestep 'cell' will be called with a slice of the Tensors in inputs.
+    parallel_iterations: The number of parallel iterations to use for the
+      internal while loop.
+    swap_memory: Whether GPU-CPU memory swapping should be enabled for the
+      internal while loop.
+  Returns:
+    originals: Original batch of data. [max_seq_len, batch_size, ndims]
+    z_means: Mean embeddings. [max_seq_len, batch_size, latent_size]
+  """
+  inputs, targets = inputs
+  max_seq_len, batch_size, ndims = targets.get_shape().as_list()
+  t0 = tf.constant(0, tf.int32)
+  init_states = cell.zero_state(batch_size, tf.float32)
+  ta = tf.TensorArray(tf.float32, max_seq_len, name='rec_ta')
+  def while_predicate(t, *unused_args):
+    return t < max_seq_len
+
+  def while_step(t, rnn_state, ta):
+    log_q_z, log_p_z, log_p_x_given_z, _, new_state, _, _, z_mean = cell((inputs[t,:,:], 
+                                                                    targets[t,:,:]), rnn_state)
+    # log_q_z, log_p_z, log_p_x_given_z are of size [num_samples * batch_size]
+    # z_mean is of size [num_samples * batch_size, latent_size]
+    # form weights for the num_samples, and resample according to these weights to get final rec.
+    log_weights = log_p_x_given_z + log_p_z - log_q_z
+    log_weights = tf.reshape(log_weights, [-1, batch_size]) # [num_samples, batch_size]
+    resampling_dist = tf.contrib.distributions.Categorical(
+        logits=tf.transpose(log_weights, perm=[1, 0])) 
+    # [batch_size] Categorical dist with num_samples categories
+    inds = resampling_dist.sample() # [batch_size] of indices in range(num_samples)
+    offset = tf.range(batch_size)
+    inds = inds * batch_size + offset # convert indices to lie in range(num_samples * batch_size)
+    z_mean = tf.gather(z_mean, inds) # size [batch_size, latent_size]
+    
+    new_ta = ta.write(t, z_mean)
+    return t + 1, new_state, new_ta
+
+  _, _, ta = tf.while_loop(
+      while_predicate,
+      while_step,
+      loop_vars=(t0, init_states, ta),
+      back_prop=False,
+      parallel_iterations=parallel_iterations,
+      swap_memory=swap_memory)
+  z_means = ta.stack()
+  return z_means, targets
+
 def sample(cell, max_seq_len, ndims, num_samples=4, parallel_iterations=30, swap_memory=True):
   """ Obtain samples from generative model.
   Args:
@@ -90,7 +145,7 @@ def sample(cell, max_seq_len, ndims, num_samples=4, parallel_iterations=30, swap
     return t < max_seq_len
 
   def while_step(t, rnn_state, inputs, ta):
-    _, _, _, _, new_state, _, sample = cell((inputs, dummy_target), rnn_state)
+    _, _, _, _, new_state, _, sample, _ = cell((inputs, dummy_target), rnn_state)
     new_ta = ta.write(t, sample)
     return t + 1, new_state, sample, new_ta
 

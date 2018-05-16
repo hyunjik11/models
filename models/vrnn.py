@@ -144,7 +144,7 @@ class VRNNCell(snt.AbstractModule):
       batch_size: The batch size.
       dtype: The data type of the VRNN.
     Returns:
-      zero_state: The initial state of the VRNN.
+      zero_state: A tuple of the initial state of the VRNN and z0
     """
     return (self.rnn_cell.zero_state(batch_size, dtype),
             tf.zeros([batch_size, self.encoded_z_size], dtype=dtype))
@@ -176,6 +176,8 @@ class VRNNCell(snt.AbstractModule):
         Tensor of shape [num_samples * batch_size, ndims]
       sample: sample from generative distribution.
         Tensor of shape [num_samples * batch_size, ndims]
+      z_mean: posterior means.
+        Tensor of shape [num_samples * batch_size, latent_size]
     """
     inputs, targets = observations # inputs[t,:]: x_{t-1} (can be mean-centred), targets[t,:]: x_t (raw data)
     rnn_state, prev_latent_encoded = state
@@ -190,6 +192,7 @@ class VRNNCell(snt.AbstractModule):
     latent_dist_q = self.approx_posterior(rnn_out, targets_encoded,
                                           prior_mu=latent_dist_prior.loc) # q(z_t) = D(o_t,x_t), a normal distribution
     # Sample the new latent state z and encode it.
+    z_mean = latent_dist_q.mean()
     latent_state = latent_dist_q.sample(seed=self.random_seed)
     latent_encoded = self.latent_feat_extractor(latent_state)
     # Calculate probabilities of the latent state according to the prior p
@@ -212,7 +215,7 @@ class VRNNCell(snt.AbstractModule):
     sample = sample_dist.mean()
     
     return (log_q_z, log_p_z, log_p_x_given_z, analytic_kl,
-            (new_rnn_state, latent_encoded), rec, sample)
+            (new_rnn_state, latent_encoded), rec, sample, z_mean)
 
 _DEFAULT_INITIALIZERS = {"w": tf.contrib.layers.xavier_initializer(),
                          "b": tf.zeros_initializer()}
@@ -227,9 +230,9 @@ def create_vrnn(
     encoded_data_size=None,
     encoded_latent_size=None,
     conv=False,
-    output_channels=[32,32,32,64,64,64,64,64,64],#[32,32,32,64,64,64],#[32,32,64,64],
-    kernel_shapes=[3]*9,#[3]*6,#[3]*4,
-    strides=[1,2,1,2,1,2,1,1,1],#[1,2,1,2,1,2],#[2,2,2,2],
+    output_channels=[32,32,32,64,64,64,64,64,64],#[32,32,64,64],#[32,32,32,64,64,64],####
+    kernel_shapes=[3]*9,#[3]*4,#[3]*6,####
+    strides=[1,2,1,2,1,2,1,1,1],#[2,2,2,2],#[1,2,1,2,1,2],####
     sigma_min=0.01,
     raw_sigma_bias=-1.,
     generative_bias_init=0.0,
@@ -549,6 +552,31 @@ class ConditionalNormalDistribution_fixed_var_deconv(object):
 
     num_deconv_layers = len(output_channels)
     paddings = [padding]*num_deconv_layers
+    """
+    deconvnet = snt.nets.ConvNet2DTranspose(
+        output_channels=output_channels,
+        output_shapes=output_shapes,
+        kernel_shapes=kernel_shapes,
+        strides=strides,
+        paddings=paddings,
+        activation=hidden_activation_fn,
+        initializers=initializers,
+        activate_final=False,
+        use_bias=True,
+        name=name + "_deconvnet")
+    flatten = snt.BatchFlatten()
+    if mean_init is not None:
+      with tf.variable_scope("decoder", reuse=tf.AUTO_REUSE):
+        bias_tensor = tf.get_variable(initializer=mean_init, name="output_bias")
+      additive_bias_fn = lambda x: x + bias_tensor
+    else:
+      additive_bias_fn = lambda x: x
+    self.dnn = snt.Sequential([fcnet, 
+                               unflatten, 
+                               deconvnet, 
+                               flatten,
+                               additive_bias_fn])
+    """
     deconvnet_hidden = snt.nets.ConvNet2DTranspose(
         output_channels=output_channels[:-1],
         output_shapes=output_shapes[:-1],
@@ -584,7 +612,7 @@ class ConditionalNormalDistribution_fixed_var_deconv(object):
                                deconvnet_out, 
                                flatten,
                                additive_bias_fn])
-
+  
   def condition(self, tensor_list, **unused_kwargs):
     """Computes the parameters of a normal distribution based on the inputs."""
     inputs = tf.concat(tensor_list, axis=1)

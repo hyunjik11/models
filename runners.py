@@ -26,7 +26,6 @@ import time
 
 import numpy as np
 import tensorflow as tf
-
 import bounds
 import utils
 from data import datasets
@@ -70,8 +69,9 @@ def create_dataset_and_model(config, split, shuffle, repeat):
     generative_bias_init = None
     generative_distribution_class = vrnn.ConditionalNormalDistribution
   elif config.dataset_type == "mnist":
-    inputs, targets, lengths, mean_image = datasets.create_mnist_dataset(config.train_path,
-        config.valid_path, split, config.batch_size, config.seq_len, config.stage_itr)
+    inputs, targets, lengths, mean_image, tensors = datasets.create_mnist_dataset(
+        config.train_path, config.valid_path, split, config.batch_size, config.seq_len,
+        config.stage_itr)
     generative_bias_init = None
     generative_distribution_class = vrnn.ConditionalNormalDistribution_fixed_var
 
@@ -102,7 +102,11 @@ def create_dataset_and_model(config, split, shuffle, repeat):
                            rnn_hidden_size=config.rnn_hidden_size,
                            fcnet_hidden_sizes=fcnet_hidden_sizes,
                            mean_init=mean_init)
-  return inputs, targets, lengths, model
+  if config.mode == 'train':
+    return inputs, targets, lengths, model
+  elif config.mode == 'eval':
+    return inputs, targets, lengths, model, tensors
+    
 
 
 def restore_checkpoint_if_exists(saver, sess, logdir):
@@ -345,16 +349,22 @@ def run_eval(config):
     Returns:
       lower_bounds: A tuple of float Tensors containing the values of the 3
         evidence lower bounds, summed across the batch.
+      kl: KL(q(z|x)||p(z)), summed across the batch.
+      rec: reconstruction quality, summed across batch.
+      z_means: the mean embeddings of the batch. i.e. mean(q(z|x))
+      targets: the batch of data.
+      tensors: batch of tensors with all train/validation data. Depends on config.split. 
+        A dict of keys: imgs, labels, coords, nums).
       total_batch_length: The total number of timesteps in the batch, summed
         across batch examples.
       batch_size: The batch size.
       global_step: The global step the checkpoint was loaded from.
     """
     global_step = tf.train.get_or_create_global_step()
-    inputs, targets, lengths, model = create_dataset_and_model(
+    inputs, targets, lengths, model, tensors = create_dataset_and_model(
         config, split=config.split, shuffle=False, repeat=False)
     # Compute lower bounds on the log likelihood.
-    elbo_ll_per_seq, _, _, _ = bounds.iwae(
+    elbo_ll_per_seq, kl_per_seq, _, _ = bounds.iwae(
         model, (inputs, targets), lengths, num_samples=1)
     iwae_ll_per_seq, _, _, _ = bounds.iwae(
         model, (inputs, targets), lengths, num_samples=config.num_samples)
@@ -364,18 +374,26 @@ def run_eval(config):
     elbo_ll = tf.reduce_sum(elbo_ll_per_seq)
     iwae_ll = tf.reduce_sum(iwae_ll_per_seq)
     fivo_ll = tf.reduce_sum(fivo_ll_per_seq)
+    kl = tf.reduce_sum(kl_per_seq)
+    z_means, targets = utils.z_mean(model, (inputs, targets))
+
     batch_size = tf.shape(lengths)[0]
     total_batch_length = tf.reduce_sum(lengths)
-    return ((elbo_ll, iwae_ll, fivo_ll), total_batch_length, batch_size,
-            global_step)
+    imgs = tensors['imgs']
+    labels = tensors['labels']
+    coords = tf.cast(tensors['coords'],tf.float32)
+    nums = tensors['nums']
+    return ((elbo_ll, iwae_ll, fivo_ll), kl, z_means, targets, imgs, labels, coords, nums, 
+             total_batch_length, batch_size, global_step)
 
-  def average_bounds_over_dataset(lower_bounds, total_batch_length, batch_size,
+  def average_bounds_over_dataset(lower_bounds, kl, total_batch_length, batch_size,
                                   sess):
     """Computes the values of the bounds, averaged over config.num_eval data points.
 
     Args:
       lower_bounds: Tuple of float Tensors containing the values of the bounds
         evaluated on a single batch.
+      kl: KL(q(z|x)||p(z)), summed across the batch.
       total_batch_length: Integer Tensor that represents the total number of
         timesteps in the current batch.
       batch_size: Integer Tensor containing the batch size. This can vary if the
@@ -386,25 +404,113 @@ def run_eval(config):
         value, normalized by the total number of timesteps in the datset. Can
         be interpreted as a lower bound on the average log likelihood per
         timestep in the dataset.
-      ll_per_seq: A length 3 numpy array of floats containing each bound's
+      ll_per_seq: A  length 3 numpy array of floats containing each bound's
         average value, normalized by the number of sequences in the dataset.
         Can be interpreted as a lower bound on the average log likelihood per
         sequence in the datset.
+      kl_per_t: Mean kl value per time step.
+      kl_per_seq: Mean kl value per sequence.
     """
     total_ll = np.zeros(3, dtype=np.float64)
     total_n_elems = 0.0
     total_length = 0.0
+    total_kl = 0.0
+    batch_number = 0
+    num_batches = config.num_eval / config.batch_size
     while total_n_elems < config.num_eval:
       try:
-        outs = sess.run([lower_bounds, batch_size, total_batch_length])
+        outs = sess.run([lower_bounds, kl, batch_size, total_batch_length])
       except tf.errors.OutOfRangeError:
         break
       total_ll += outs[0]
-      total_n_elems += outs[1]
-      total_length += outs[2]
+      total_kl += outs[1]
+      total_n_elems += outs[-2]
+      total_length += outs[-1]
+      batch_number += 1
+      if batch_number%50 == 0:
+        print("%d batches out of %d done" %(batch_number, num_batches))
     ll_per_t = total_ll / total_length
+    kl_per_t = total_kl / total_length
     ll_per_seq = total_ll / total_n_elems
-    return ll_per_t, ll_per_seq
+    kl_per_seq = total_kl / total_n_elems
+    return ll_per_t, ll_per_seq, kl_per_t, kl_per_seq
+
+  def log_p_over_dataset(log_p, total_batch_length, batch_size, sess):
+    """Computes log_p over dataset - iwae bound.
+
+    Args:
+      log_p: iwae bound
+      total_batch_length: Integer Tensor that represents the total number of
+        timesteps in the current batch.
+      batch_size: Integer Tensor containing the batch size. This can vary if the
+        requested batch_size does not evenly divide the size of the dataset.
+      sess: A TensorFlow Session object.
+    Returns:
+      log_p_per_t: log_p per time step.
+      log_p_per_seq: log_p per sequence.
+    """
+    total_log_p = 0.0
+    total_n_elems = 0.0
+    total_length = 0.0
+    batch_number = 0
+    num_batches = config.num_eval / config.batch_size
+    while total_n_elems < config.num_eval:
+      try:
+        outs = sess.run([log_p, batch_size, total_batch_length])
+      except tf.errors.OutOfRangeError:
+        break
+      total_log_p += outs[0]
+      total_n_elems += outs[-2]
+      total_length += outs[-1]
+      batch_number += 1
+      if batch_number%100 == 0:
+        print("%d batches out of %d done" %(batch_number, num_batches))
+    log_p_per_t = total_log_p / total_length
+    log_p_per_seq = total_log_p / total_n_elems
+    return log_p_per_t, log_p_per_seq
+
+  def z_mean_over_dataset(z_means, originals, imgs, labels, coords, nums, sess):
+    """Computes the values of the z_mean aggregated over config.num_eval data points.
+
+    Args:
+      z_means: Tensor of mean embeddings of size [max_seq_len, batch_size, latent_size]
+      originals: Tensor of corresponding data of size [max_seq_len, batch_size, ndims]
+      imgs, labels, coords, nums: A batch of tensors giving train/validation data. 
+      sess: A TensorFlow Session object.
+    Returns:
+      z_mean: A numpy array of float32 of size [max_seq_len, num_eval, latent_size]
+      original: A numpy array of float32 of size [max_seq_len, num_eval, H, W]
+    """
+    num_eval = config.num_eval
+    H, W, C = [config.H, config.W, config.C]
+    max_seq_len, batch_size, ndims = originals.get_shape().as_list()
+    _, _, latent_size = z_means.get_shape().as_list()
+    z_mean = np.zeros(shape=(max_seq_len, num_eval, latent_size), dtype=np.float32)
+    original = np.zeros(shape=(max_seq_len, num_eval, H, W), dtype=np.float32)
+    label = np.zeros(shape=(num_eval, 2), dtype=np.uint8)
+    coord = np.zeros(shape=(max_seq_len, num_eval, 3, 4), dtype=np.float32)
+    num = np.zeros(shape=(max_seq_len, num_eval, 3), dtype=np.float32)
+
+    total_n_elems = 0
+    while total_n_elems < config.num_eval:
+      try:
+        (batch_z_mean, batch_original, batch_img, batch_label, batch_coord, 
+         batch_num) = sess.run([z_means, originals, imgs, labels, coords, nums])
+        batch_original = np.reshape(batch_original, (max_seq_len,batch_size,H,W))
+      except tf.errors.OutOfRangeError:
+        break
+      if np.array_equal(batch_img, batch_original):
+        print('batches are identical!')
+      else:
+        print('batch discrepancy:%.3f' %np.sum(np.abs(batch_img - batch_original)))
+      z_mean[:, total_n_elems:total_n_elems + batch_size,:] = batch_z_mean
+      original[:, total_n_elems:total_n_elems + batch_size ,:,:] = batch_original
+      label[total_n_elems:total_n_elems + batch_size, :] = batch_label
+      coord[:, total_n_elems:total_n_elems + batch_size ,:,:] = batch_coord
+      num[:, total_n_elems:total_n_elems + batch_size ,:] = batch_num
+
+      total_n_elems += batch_size
+    return z_mean, original, label, coord, num
 
   def summarize_lls(lls_per_t, lls_per_seq, summary_writer, step):
     """Creates log-likelihood lower bound summaries and writes them to disk.
@@ -434,7 +540,8 @@ def run_eval(config):
   with tf.Graph().as_default():
     if config.random_seed: tf.set_random_seed(config.random_seed)
     gpu_config = tf.ConfigProto(); gpu_config.gpu_options.visible_device_list = str(config.gpu) 
-    lower_bounds, total_batch_length, batch_size, global_step = create_graph()
+    (lower_bounds, kl, z_means, originals, imgs, labels, coords, nums,
+     total_batch_length, batch_size, global_step) = create_graph()
     summary_dir = config.logdir + "/" + config.split
     summary_writer = tf.summary.FileWriter(
         summary_dir, flush_secs=15, max_queue=100)
@@ -443,10 +550,26 @@ def run_eval(config):
       wait_for_checkpoint(saver, sess, config.logdir)
       step = sess.run(global_step)
       tf.logging.info("Model restored from step %d, evaluating." % step)
-      ll_per_t, ll_per_seq = average_bounds_over_dataset(
-          lower_bounds, total_batch_length, batch_size, sess)
-      summarize_lls(ll_per_t, ll_per_seq, summary_writer, step)
-      tf.logging.info("%s elbo ll/t: %.1f, iwae ll/t: %.1f fivo ll/t: %.1f",
-                      config.split, ll_per_t[0], ll_per_t[1], ll_per_t[2])
-      tf.logging.info("%s elbo ll/seq: %.1f, iwae ll/seq: %.1f fivo ll/seq: %.1f",
-                      config.split, ll_per_seq[0], ll_per_seq[1], ll_per_seq[2])
+      ### computing log_bounds
+      #ll_per_t, ll_per_seq, kl_per_t, kl_per_seq = average_bounds_over_dataset(
+      #    lower_bounds, kl, total_batch_length, batch_size, sess)
+      #rec_per_t = ll_per_t[0] + kl_per_t
+      #rec_per_seq = ll_per_seq[0] + kl_per_seq
+      #summarize_lls(ll_per_t, ll_per_seq, summary_writer, step)
+      #tf.logging.info("%s elbo/t: %.1f, iwae/t: %.1f fivo/t: %.1f kl/t: %.1f rec/t: %.1f",
+      #                config.split, ll_per_t[0], ll_per_t[1], ll_per_t[2], kl_per_t, rec_per_t)
+      #tf.logging.info("%s elbo/seq: %.1f, iwae/seq: %.1f fivo/seq: %.1f kl/seq: %.1f rec/t: %.1f",
+      #                config.split, ll_per_seq[0], ll_per_seq[1], ll_per_seq[2], 
+      #                kl_per_seq, rec_per_seq)
+      ### computing log_p
+      log_p_per_t, log_p_per_seq = log_p_over_dataset(lower_bounds[1], total_batch_length,
+                                                      batch_size, sess)
+      tf.logging.info("%s log_p/t: %.1f", config.split, log_p_per_t)
+      tf.logging.info("%s log_p/seq: %.1f", config.split, log_p_per_seq)
+      ### computing z_mean
+      #z_mean, original, label, coord, num = z_mean_over_dataset(z_means, originals,
+      #                                      imgs, labels, coords, nums, sess)
+    #print("The ordering of z_mean and images are the same. So saving z_means")
+    #filename='vrnn_z_means_' + config.split + '.npz'
+    #np.savez(filename, z_means=z_mean, imgs=original, labels=label, coords=coord, nums=num)
+      

@@ -249,9 +249,11 @@ def create_mnist_dataset(train_path, valid_path, split, batch_size, seq_len, sta
   """
   data_dict = mnist_tools.load_data(batch_size, train_path, valid_path, seq_len, stage_itr)
   if split == 'train':
-    images = data_dict['train_img'] # tf.float32 [time,batch_size,H,W]
+    tensors = data_dict['train_tensors']
+    images = tensors['imgs'] # tf.float32 [time,batch_size,H,W]
   elif split == 'valid':
-    images = data_dict['valid_img'] # tf.float32 [time,batch_size,H,W]
+    tensors = data_dict['valid_tensors']
+    images = tensors['imgs'] # tf.float32 [time,batch_size,H,W]
   else:
     raise ValueError('split should be one of "train" or "valid"')
   
@@ -268,4 +270,6 @@ def create_mnist_dataset(train_path, valid_path, split, batch_size, seq_len, sta
   full_data = data_dict['train_data']['imgs'] # np.float32 [time,N,H,W]
   mean_image = np.mean(full_data, axis=(0,1)) # np.float32 [H,W]
   mean_image = np.reshape(mean_image, (ndims)) # np.float32 [ndims]
-  return inputs, targets, lengths, mean_image
+
+  # Also output all validation data (dict of keys: imgs, labels, coords, nums)
+  return inputs, targets, lengths, mean_image, tensors
